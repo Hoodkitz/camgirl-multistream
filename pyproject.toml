@@ -1,0 +1,6 @@
+[project]
+name = "camgirl-multistream"
+version = "0.1.0"
+description = "Multi-Stream & Chat-Aggregation SaaS"
+requires-python = ">=3.11"
+dependencies = ["fastapi", "uvicorn", "sqlalchemy", "asyncpg", "pydantic", "httpx", "redis"]
