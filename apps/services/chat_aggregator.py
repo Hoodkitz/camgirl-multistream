@@ -1,17 +1,28 @@
 """Chat aggregation service for multi-platform chat bundling."""
 import asyncio
 import httpx
-from typing import Dict, List
-from datetime import datetime
+import json
+from typing import Dict, List, Optional
+from datetime import datetime, timezone
 from apps.core.config import settings
 import redis.asyncio as redis
+from apps.services.chat_adapter import ChaturbateChatAdapter
+from apps.db.models import PlatformAccount as PlatformAccountModel
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from apps.services.credentials_manager import CredentialsManager
 
 
 class ChatAggregator:
-    def __init__(self):
+    def __init__(self, adapters=None):
         self._messages: Dict[str, List[dict]] = {}
         self._platforms: Dict[str, str] = {}
         self._r = None
+        self._adapters = adapters if adapters is not None else {
+            "chaturbate": ChaturbateChatAdapter(),
+            # other adapters would be instantiated here for production
+        }
+        self._cred_manager = CredentialsManager()
 
     async def connect_redis(self):
         if self._r is None:
@@ -25,13 +36,13 @@ class ChatAggregator:
         await self.connect_redis()
         
         msg = {
-            "id": f"{tenant_id}:{platform}:{datetime.utcnow().timestamp()}",
+            "id": f"{tenant_id}:{platform}:{datetime.now(timezone.utc).timestamp()}",
             "tenant_id": tenant_id,
             "platform": platform,
             "sender": sender,
             "content": content,
             "type": msg_type,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         
         key = f"chat:{tenant_id}"
@@ -57,17 +68,35 @@ class ChatAggregator:
         msgs = [m for m in self._messages.get(tenant_id, []) if m["platform"] == platform]
         return sorted(msgs, key=lambda m: m["timestamp"], reverse=True)[:limit]
 
-    def send_reply(self, tenant_id: str, platform: str, recipient: str, content: str) -> dict:
+    async def send_reply(self, tenant_id: str, platform: str, recipient: str, content: str, db_session: Optional[AsyncSession] = None) -> dict:
         """Send a reply to a specific platform."""
+        credentials = {}
+        if db_session:
+            stmt = select(PlatformAccountModel).where(
+                PlatformAccountModel.tenant_id == tenant_id,
+                PlatformAccountModel.platform_name == platform
+            )
+            result = await db_session.execute(stmt)
+            account = result.scalars().first()
+            if account:
+                # We expect the actual credential, decrypted
+                credentials = {"api_key": self._cred_manager.decrypt(account.encrypted_credentials)}
+
+        adapter = self._adapters.get(platform)
+        if adapter:
+            success = await adapter.send_message(credentials, recipient, content)
+            if not success:
+                print(f"Failed to send message via adapter for {platform}")
+
         msg = {
-            "id": f"{tenant_id}:{platform}:reply:{datetime.utcnow().timestamp()}",
+            "id": f"{tenant_id}:{platform}:reply:{datetime.now(timezone.utc).timestamp()}",
             "tenant_id": tenant_id,
             "platform": platform,
             "sender": "model",
             "recipient": recipient,
             "content": content,
             "type": "reply",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self._messages.setdefault(tenant_id, []).append(msg)
         return msg
@@ -88,13 +117,13 @@ class ChatAggregatorManager:
     _lock = asyncio.Lock()
 
     @classmethod
-    async def get_instance(cls):
+    async def get_instance(cls, adapters=None):
         if cls._instance is None:
             async with cls._lock:
                 if cls._instance is None:
-                    cls._instance = ChatAggregator()
+                    cls._instance = ChatAggregator(adapters=adapters)
         return cls._instance
 
 
-async def get_chat_aggregator():
-    return await ChatAggregatorManager.get_instance()
+async def get_chat_aggregator(adapters=None):
+    return await ChatAggregatorManager.get_instance(adapters)

@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+import uuid
 from uuid import UUID
 from datetime import datetime
 from apps.api.schemas.streams import (
@@ -28,7 +29,7 @@ async def create_stream(req: StreamCreate, session: AsyncSession = Depends(get_s
         raise HTTPException(status_code=400, detail="At least one target platform required")
     
     db_session = StreamSessionModel(
-        id=UUID(str(req.tenant_id) + "_session_" + datetime.utcnow().strftime("%Y%m%d%H%M%S")),
+        id=uuid.uuid4(),
         tenant_id=req.tenant_id,
         ingest_protocol=req.ingest_protocol,
         target_platforms=req.target_platforms,
@@ -63,7 +64,7 @@ async def trigger_stream(session_id: UUID, session: AsyncSession = Depends(get_s
         raise HTTPException(status_code=404, detail="Stream not found")
     
     aggregator = await get_stream_aggregator()
-    result = await aggregator.trigger_stream(str(db_session.id), db_session.target_platforms)
+    result = await aggregator.trigger_stream(str(db_session.id), str(db_session.tenant_id), db_session.target_platforms, session)
     db_session.is_active = True
     db_session.viewer_count = result.get("viewer_count", 0)
     await session.commit()

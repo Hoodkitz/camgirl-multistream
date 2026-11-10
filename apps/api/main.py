@@ -17,6 +17,8 @@ app.add_middleware(
 app.include_router(streams.router)
 app.include_router(chats.router)
 app.include_router(stats.router)
+from apps.api.routers import platforms
+app.include_router(platforms.router)
 
 @app.get("/")
 def root():

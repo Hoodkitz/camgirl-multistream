@@ -10,12 +10,13 @@ from apps.api.schemas.chats import (
 from apps.db.session import get_session
 from apps.db.models import ChatMessage as ChatMessageModel
 from apps.services.chat_aggregator import ChatAggregator, get_chat_aggregator
+from apps.api.security import get_current_user, require_role
 
 router = APIRouter(prefix="/chats", tags=["chats"])
 
 
 @router.post("/ingest")
-async def ingest_chat(req: ChatIngest, session: AsyncSession = Depends(get_session)):
+async def ingest_chat(req: ChatIngest, session: AsyncSession = Depends(get_session), current_user: dict = Depends(require_role("model"))):
     aggregator = await get_chat_aggregator()
     
     # Save to DB
@@ -33,8 +34,9 @@ async def ingest_chat(req: ChatIngest, session: AsyncSession = Depends(get_sessi
     await session.commit()
     
     # Also add to aggregator for unified inbox
-    msg = aggregator.ingest_message(
+    msg = await aggregator.ingest_message(
         tenant_id=str(req.tenant_id),
+        db_session=session,
         platform=req.platform,
         sender=req.sender,
         content=str(req.payload.get("content", "")),
@@ -44,7 +46,7 @@ async def ingest_chat(req: ChatIngest, session: AsyncSession = Depends(get_sessi
 
 
 @router.get("/inbox/{tenant_id}")
-async def unified_inbox(tenant_id: UUID, limit: int = 50, session: AsyncSession = Depends(get_session)):
+async def unified_inbox(tenant_id: UUID, limit: int = 50, session: AsyncSession = Depends(get_session), current_user: dict = Depends(require_role("model"))):
     aggregator = await get_chat_aggregator()
     
     # Get DB messages
@@ -53,23 +55,24 @@ async def unified_inbox(tenant_id: UUID, limit: int = 50, session: AsyncSession 
     db_messages = result.scalars().all()
     
     # Get unified inbox from aggregator
-    unified = aggregator.get_unified_inbox(tenant_id, limit)
+    unified = aggregator.get_unified_inbox(str(tenant_id), limit)
     
     return {"unified_inbox": unified, "db_messages_count": len(db_messages)}
 
 
 @router.get("/platform/{tenant_id}/{platform}")
-async def platform_chats(tenant_id: UUID, platform: str, limit: int = 50, session: AsyncSession = Depends(get_session)):
+async def platform_chats(tenant_id: UUID, platform: str, limit: int = 50, session: AsyncSession = Depends(get_session), current_user: dict = Depends(require_role("model"))):
     aggregator = await get_chat_aggregator()
-    msgs = aggregator.get_platform_messages(tenant_id, platform, limit)
+    msgs = aggregator.get_platform_messages(str(tenant_id), platform, limit)
     return {"platform": platform, "messages": msgs}
 
 
 @router.post("/reply")
-async def send_reply(req: ChatResponse, session: AsyncSession = Depends(get_session)):
+async def send_reply(req: ChatResponse, session: AsyncSession = Depends(get_session), current_user: dict = Depends(require_role("model"))):
     aggregator = await get_chat_aggregator()
-    msg = aggregator.send_reply(
+    msg = await aggregator.send_reply(
         tenant_id=str(req.tenant_id),
+        db_session=session,
         platform=req.platform,
         recipient=req.recipient,
         content=req.content,
@@ -78,13 +81,14 @@ async def send_reply(req: ChatResponse, session: AsyncSession = Depends(get_sess
 
 
 @router.post("/auto-respond")
-async def auto_respond(req: ChatResponse, session: AsyncSession = Depends(get_session)):
+async def auto_respond(req: ChatResponse, session: AsyncSession = Depends(get_session), current_user: dict = Depends(require_role("model"))):
     aggregator = await get_chat_aggregator()
     # Simulate AI auto-response
     response = aggregator.generate_auto_response(
         tenant_id=str(req.tenant_id),
+        db_session=session,
         platform=req.platform,
-        sender=req.sender,
+        sender=req.sender, # Note: req has no sender directly in ChatResponse in MVP Schema, passing empty for now or modifying schema if needed
         content=req.content,
     )
     return {"auto_response": response, "is_automated": True}
