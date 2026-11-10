@@ -1,9 +1,12 @@
 """CamGirl Multi-Stream API."""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from apps.api.routers.chat import router as chat_router
 from apps.api.routers.streams import router as streams_router
 
 app = FastAPI(title="CamGirl Multi-Stream SaaS", version="1.0.0")
+
+app.include_router(chat_router)
 
 app.include_router(streams_router)
 
