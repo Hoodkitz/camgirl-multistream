@@ -4,9 +4,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from uuid import UUID
 from datetime import datetime, timedelta
-from ..schemas.stats import StatsResponse
-from ...db.session import get_session
-from ...db.models import StreamSession as StreamSessionModel
+from apps.api.schemas.stats import StreamStatsResponse
+from apps.db.session import get_session
+from apps.db.models import StreamSession as StreamSessionModel
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
@@ -18,7 +18,7 @@ async def get_stream_stats(stream_id: UUID, session: AsyncSession = Depends(get_
     if not db:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Stream not found")
-    return StatsResponse(
+    return StreamStatsResponse(
         stream_id=stream_id,
         viewer_count=db.viewer_count,
         duration_seconds=int((datetime.utcnow() - db.started_at).total_seconds()),

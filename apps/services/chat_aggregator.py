@@ -3,7 +3,7 @@ import asyncio
 import httpx
 from typing import Dict, List
 from datetime import datetime
-from ..core.config import settings
+from apps.core.config import settings
 import redis.asyncio as redis
 
 
@@ -81,3 +81,20 @@ class ChatAggregator:
             return f"Danke für deine Nachricht {sender}! Ich schaue mir das gerne an."
         else:
             return f"OK {sender}! Bei Bedarf melde dich gerne."
+
+
+class ChatAggregatorManager:
+    _instance = None
+    _lock = asyncio.Lock()
+
+    @classmethod
+    async def get_instance(cls):
+        if cls._instance is None:
+            async with cls._lock:
+                if cls._instance is None:
+                    cls._instance = ChatAggregator()
+        return cls._instance
+
+
+async def get_chat_aggregator():
+    return await ChatAggregatorManager.get_instance()

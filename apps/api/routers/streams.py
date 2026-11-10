@@ -4,15 +4,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from uuid import UUID
 from datetime import datetime
-from ..schemas.streams import (
+from apps.api.schemas.streams import (
     StreamCreate, StreamResponse, StreamSessionCreate, StreamSessionResponse
 )
-from ...db.session import get_session
-from ...db.models import (
+from apps.db.session import get_session
+from apps.db.models import (
     StreamSession as StreamSessionModel, PlatformAccount as PlatformAccountModel,
     Tenant as TenantModel
 )
-from ...services.stream_aggregator import StreamAggregator, get_stream_aggregator
+from apps.services.stream_aggregator import StreamAggregator, get_stream_aggregator
 
 router = APIRouter(prefix="/streams", tags=["streams"])
 

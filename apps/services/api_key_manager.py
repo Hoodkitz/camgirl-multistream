@@ -2,7 +2,7 @@
 import secrets
 from datetime import datetime, timedelta
 from typing import Dict
-from ..core.config import settings
+from apps.core.config import settings
 import redis.asyncio as redis
 
 

@@ -4,8 +4,9 @@ import aiohttp
 import json
 from typing import Dict, List
 from datetime import datetime
-from ..core.config import settings
-import redis.asyncio as redis
+from apps.core.config import settings
+import redis
+import redis.asyncio as redis_async
 
 
 class StreamAggregator:

@@ -18,6 +18,9 @@ class Tenant(Base):
     is_active = Column(Boolean, default=True)
 
 
+    stream_sessions = relationship("StreamSession", back_populates="tenant")
+
+
 class PlatformAccount(Base):
     __tablename__ = "platform_accounts"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -61,4 +64,4 @@ class StreamSession(Base):
     tenant = relationship("Tenant", back_populates="stream_sessions")
 
 
-class Tenant.stream_sessions = relationship("StreamSession", back_populates="tenant")
+

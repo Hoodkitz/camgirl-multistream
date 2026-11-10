@@ -4,12 +4,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from uuid import UUID
 from datetime import datetime
-from ..schemas.chats import (
+from apps.api.schemas.chats import (
     ChatIngest, ChatResponse, ChatMessageCreate, ChatMessageResponse
 )
-from ...db.session import get_session
-from ...db.models import ChatMessage as ChatMessageModel
-from ...services.chat_aggregator import ChatAggregator, get_chat_aggregator
+from apps.db.session import get_session
+from apps.db.models import ChatMessage as ChatMessageModel
+from apps.services.chat_aggregator import ChatAggregator, get_chat_aggregator
 
 router = APIRouter(prefix="/chats", tags=["chats"])
 
