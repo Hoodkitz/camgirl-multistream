@@ -1,7 +1,6 @@
-"""Domain models for CamGirl Multi-Stream SaaS."""
+"""Domain models."""
 from enum import Enum
 from datetime import datetime
-from typing import Optional, List
 from uuid import UUID, uuid4
 from pydantic import BaseModel, Field
 
@@ -12,13 +11,16 @@ class Platform(str, Enum):
     MYFREECAMS = "myfreecams"
     BONGACAMS = "bongacams"
     CAMSODA = "camsoda"
+    ORIENT = "orient"
+    KINK = "kink"
 
 
 class Tenant(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     name: str
-    kms_kek_arn: str
+    kms_kek_arn: str = "arn:aws:kms:us-east-1:123456789012:key/example"
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    is_active: bool = True
 
 
 class PlatformAccount(BaseModel):
@@ -31,14 +33,15 @@ class PlatformAccount(BaseModel):
     iv: bytes
     auth_tag: bytes
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    is_active: bool = True
 
 
-class ChatEvent(BaseModel):
+class ChatMessage(BaseModel):
     event_id: str
     tenant_id: UUID
     stream_id: str
     platform: Platform
-    event_type: str  # "message", "tip", "follow", "subscribe"
+    event_type: str
     timestamp: datetime
     sender: dict
     payload: dict
@@ -47,8 +50,10 @@ class ChatEvent(BaseModel):
 class StreamSession(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     tenant_id: UUID
-    ingest_protocol: str  # "rtmp" or "srt"
-    target_platforms: List[Platform] = []
+    ingest_protocol: str = "rtmp"
+    target_platforms: list[Platform] = Field(default_factory=list)
     started_at: datetime = Field(default_factory=datetime.utcnow)
-    ended_at: Optional[datetime] = None
+    ended_at: datetime | None = None
     is_active: bool = True
+    viewer_count: int = 0
+    stats: dict = Field(default_factory=dict)
