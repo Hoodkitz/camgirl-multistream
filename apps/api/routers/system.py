@@ -33,6 +33,20 @@ async def stripe_webhook(request: Request, sig: str | None = Header(None, alias=
     return {"status": "accepted"}
 
 
+def _tier_from_prices(sub: dict) -> Tier | None:
+    """Tier = highest plan whose configured Stripe price id is part of the subscription."""
+    by_price = {settings.STRIPE_PRICE_AGENCY: Tier.AGENCY, settings.STRIPE_PRICE_PRO: Tier.PRO}
+    found = set()
+    for item in (sub.get("items") or {}).get("data", []) or []:
+        price = (item.get("price") or {}).get("id")
+        if price and price in by_price:
+            found.add(by_price[price])
+    for tier in (Tier.AGENCY, Tier.PRO):
+        if tier in found:
+            return tier
+    return None
+
+
 async def process_inbox() -> int:
     n = 0
     async with SessionLocal() as db:
@@ -46,8 +60,8 @@ async def process_inbox() -> int:
                 t = await db.get(Tenant, uuid.UUID(meta["tenant_id"]))
                 if t:
                     active = obj.get("status") in ("active", "trialing") and w.payload["type"] != "customer.subscription.deleted"
-                    tier = meta.get("tier", "standard")
-                    t.tier = Tier(tier).value if active and tier in Tier._value2member_map_ else Tier.STANDARD.value
+                    tier = _tier_from_prices(obj)  # never trust metadata: plan switches in the portal keep old metadata
+                    t.tier = tier.value if active and tier else Tier.STANDARD.value
                     t.stripe_customer_id = obj.get("customer")
             w.processed_at = utcnow()
             n += 1

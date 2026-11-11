@@ -110,3 +110,15 @@ def test_billing_checkout(client, monkeypatch):
     assert seen["form"]["subscription_data[metadata][tenant_id]"] == tok["tenant_id"]
     assert seen["form"]["subscription_data[metadata][tier]"] == "pro"
     assert client.post("/api/v1/billing/portal", headers=H(tok)).status_code == 404
+
+
+def test_removed_member_and_logout_all_invalidate_access_tokens(client):
+    owner = signup(client, "boss@example.com", "Boss")
+    r = client.post("/api/v1/auth/team", headers=H(owner),
+                    json={"email": "temp@example.com", "password": "agent-pass-123", "role": "agent"})
+    agent = client.post("/api/v1/auth/login", json={"email": "temp@example.com", "password": "agent-pass-123"}).json()
+    assert client.get("/api/v1/chat/inbox", headers=H(agent)).status_code == 200
+    client.delete(f"/api/v1/auth/team/{r.json()['id']}", headers=H(owner))
+    assert client.get("/api/v1/chat/inbox", headers=H(agent)).status_code == 401  # immediately, not after 15 min
+    assert client.post("/api/v1/auth/logout-all", headers=H(owner)).status_code == 204
+    assert client.get("/api/v1/tenants/me", headers=H(owner)).status_code == 401

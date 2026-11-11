@@ -29,19 +29,23 @@ class CurrentUser:
     roles: list[Role]
     permissions: set[Permission] = field(default_factory=set)
     auth_time: int | None = None
+    account_version: int | None = None  # set for built-in accounts (re-checked against the DB per request)
 
     def has(self, perm: Permission) -> bool:
         return perm in self.permissions
 
 
 def issue_token(sub: str, tenant_id: str | uuid.UUID, roles: list[str], minutes: int | None = None,
-                auth_time: int | None = None) -> str:
+                auth_time: int | None = None, ver: int | None = None) -> str:
+    """``ver`` marks a built-in account: the API then re-checks the account (exists, same role, not logged out)."""
     now = datetime.now(timezone.utc)
     claims = {"auth_time": auth_time or int(now.timestamp()),
         "sub": sub, "tenant_id": str(tenant_id), "roles": roles,
         "iss": settings.OIDC_ISSUER, "aud": settings.JWT_AUDIENCE,
         "iat": now, "exp": now + timedelta(minutes=minutes or settings.ACCESS_TOKEN_MINUTES),
     }
+    if ver is not None:
+        claims["ver"] = ver
     return jwt.encode(claims, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
@@ -85,14 +89,33 @@ def decode_token(token: str) -> CurrentUser:
             roles.append(Role(r))
         except ValueError:
             pass
-    return CurrentUser(c["sub"], tenant, roles, permissions_for(roles), c.get("auth_time"))
+    return CurrentUser(c["sub"], tenant, roles, permissions_for(roles), c.get("auth_time"), c.get("ver"))
 
 
 async def get_current_user(cred: HTTPAuthorizationCredentials | None = Depends(bearer)) -> CurrentUser:
     if cred is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Nicht authentifiziert",
                             headers={"WWW-Authenticate": "Bearer"})
-    return decode_token(cred.credentials)
+    user = decode_token(cred.credentials)
+    if user.account_version is not None:
+        await _check_account(user)
+    return user
+
+
+async def _check_account(user: CurrentUser) -> None:
+    """Built-in accounts: removed members, role changes and 'log out everywhere' take effect immediately."""
+    from apps.db import models as m
+    from apps.db.session import SystemSessionLocal
+    try:
+        uid = uuid.UUID(user.sub)
+    except ValueError:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Ungueltiges Token")
+    async with SystemSessionLocal() as db:
+        acc = await db.get(m.User, uid)
+    if (acc is None or acc.tenant_id != user.tenant_id or (acc.token_version or 0) != user.account_version
+            or [r.value for r in user.roles] != [acc.role]):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Sitzung ungueltig – bitte neu anmelden",
+                            headers={"WWW-Authenticate": "Bearer"})
 
 
 def require(perm: Permission):

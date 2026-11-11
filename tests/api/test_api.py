@@ -163,16 +163,28 @@ def test_websocket_ticket_und_live_event(client, tenant):
             ws.receive_json()
 
 
-def test_stripe_webhook_signatur_idempotenz_und_tier(client, tenant):
+def test_stripe_webhook_signatur_idempotenz_und_tier(client, tenant, monkeypatch):
+    from apps.core.config import settings
+    monkeypatch.setattr(settings, "STRIPE_PRICE_PRO", "price_pro")
+    monkeypatch.setattr(settings, "STRIPE_PRICE_AGENCY", "price_agency")
     tid, H = tenant
     ev = {"id": "evt_1", "type": "customer.subscription.updated",
-          "data": {"object": {"status": "active", "customer": "cus_1", "metadata": {"tenant_id": tid, "tier": "agency"}}}}
+          "data": {"object": {"status": "active", "customer": "cus_1", "metadata": {"tenant_id": tid, "tier": "pro"},
+                              "items": {"data": [{"price": {"id": "price_agency"}}]}}}}
     body = json.dumps(ev).encode()
     assert client.post("/api/v1/webhooks/stripe", content=body, headers={"Stripe-Signature": "t=1,v1=x"}).status_code == 400
     hdr = {"Stripe-Signature": sign("whsec_dev", body), "Content-Type": "application/json"}
     assert client.post("/api/v1/webhooks/stripe", content=body, headers=hdr).json()["status"] == "accepted"
     assert client.post("/api/v1/webhooks/stripe", content=body, headers=hdr).json()["status"] == "duplicate"
-    assert client.get("/api/v1/tenants/me", headers=H("owner")).json()["tier"] == "agency"
+    assert client.get("/api/v1/tenants/me", headers=H("owner")).json()["tier"] == "agency"  # price wins over metadata
+    # metadata claiming a higher tier than the price paid must not upgrade
+    ev2 = {"id": "evt_2", "type": "customer.subscription.updated",
+           "data": {"object": {"status": "active", "customer": "cus_1", "metadata": {"tenant_id": tid, "tier": "agency"},
+                               "items": {"data": [{"price": {"id": "price_unknown"}}]}}}}
+    body2 = json.dumps(ev2).encode()
+    client.post("/api/v1/webhooks/stripe", content=body2,
+                headers={"Stripe-Signature": sign("whsec_dev", body2), "Content-Type": "application/json"})
+    assert client.get("/api/v1/tenants/me", headers=H("owner")).json()["tier"] == "standard"
 
 
 def test_mandantentrennung(client, tenant):

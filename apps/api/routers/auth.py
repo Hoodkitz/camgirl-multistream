@@ -11,7 +11,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from apps.core.enums import Role
 from apps.core.permissions import Permission as P
@@ -65,7 +65,7 @@ class TokenOut(BaseModel):
 
 def _token(u: m.User, auth_time: int | None = None) -> TokenOut:
     at = auth_time or int(time.time())
-    return TokenOut(access_token=issue_token(str(u.id), u.tenant_id, [u.role], auth_time=at),
+    return TokenOut(access_token=issue_token(str(u.id), u.tenant_id, [u.role], auth_time=at, ver=u.token_version or 0),
                     refresh_token=issue_refresh_token(str(u.id), u.tenant_id, u.token_version or 0, at),
                     expires_in=settings.ACCESS_TOKEN_MINUTES * 60, tenant_id=u.tenant_id, role=u.role)
 
@@ -103,10 +103,13 @@ async def _check_password(db, u: m.User | None, password: str) -> bool:
     try:
         _ph.verify(u.password_hash, password)
     except (VerificationError, InvalidHashError):
-        u.failed_logins = (u.failed_logins or 0) + 1
-        if u.failed_logins >= MAX_FAILED:
-            u.locked_until = m.utcnow() + timedelta(minutes=LOCK_MINUTES)
-            u.failed_logins = 0
+        # atomic increment: parallel guesses cannot all read the same counter value
+        n = (await db.execute(update(m.User).where(m.User.id == u.id)
+                              .values(failed_logins=m.User.failed_logins + 1)
+                              .returning(m.User.failed_logins))).scalar_one()
+        if n >= MAX_FAILED:
+            await db.execute(update(m.User).where(m.User.id == u.id)
+                             .values(locked_until=m.utcnow() + timedelta(minutes=LOCK_MINUTES), failed_logins=0))
         await db.commit()
         return False
     if _ph.check_needs_rehash(u.password_hash):
