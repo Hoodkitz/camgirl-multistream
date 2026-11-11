@@ -1,91 +1,156 @@
-"""Stream management endpoints."""
-from fastapi import APIRouter, Depends, HTTPException, status
+"""Ingest-Autorisierung und dynamisches Fan-Out fuer SRS (Spec Kap. 4)."""
+import hashlib
+import json
+import secrets
+import uuid
+from datetime import timedelta
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from uuid import UUID
-from datetime import datetime
-from apps.api.schemas.streams import (
-    StreamCreate, StreamResponse, StreamSessionCreate, StreamSessionResponse
-)
-from apps.db.session import get_session
-from apps.db.models import (
-    StreamSession as StreamSessionModel, PlatformAccount as PlatformAccountModel,
-    Tenant as TenantModel
-)
-from apps.services.stream_aggregator import StreamAggregator, get_stream_aggregator
 
-router = APIRouter(prefix="/streams", tags=["streams"])
+from apps.api.schemas import SessionOut, SrsHook, StreamKeyCreate, StreamKeyCreated, StreamKeyOut, TargetOut
+from apps.core.config import settings
+from apps.core.enums import DEFAULT_INGEST, QUOTAS, Platform, Tier
+from apps.core.permissions import Permission as P
+from apps.db.models import PlatformAccount, StreamKey, StreamSession, Tenant, utcnow
+from apps.db.session import SystemSessionLocal as SessionLocal
+from apps.domain.vault import Sealed, unseal
+from apps.security.auth import CurrentUser, get_db, require, require_secret
+from apps.services.kms import kms_for
 
-
-@router.post("", response_model=StreamResponse)
-async def create_stream(req: StreamCreate, session: AsyncSession = Depends(get_session)):
-    # Validate tenant
-    stmt = select(TenantModel).where(TenantModel.id == req.tenant_id)
-    tenant = (await session.execute(stmt)).scalars().first()
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-    if not req.target_platforms:
-        raise HTTPException(status_code=400, detail="At least one target platform required")
-    
-    db_session = StreamSessionModel(
-        id=UUID(str(req.tenant_id) + "_session_" + datetime.utcnow().strftime("%Y%m%d%H%M%S")),
-        tenant_id=req.tenant_id,
-        ingest_protocol=req.ingest_protocol,
-        target_platforms=req.target_platforms,
-    )
-    session.add(db_session)
-    await session.commit()
-    return db_session
+router = APIRouter(prefix="/api/v1/streams", tags=["streams"])
+INGEST_HOST = "ingest.example.invalid"
 
 
-@router.get("/{session_id}", response_model=StreamResponse)
-async def get_stream(session_id: UUID, session: AsyncSession = Depends(get_session)):
-    stmt = select(StreamSessionModel).where(StreamSessionModel.id == session_id)
-    db_session = (await session.execute(stmt)).scalars().first()
-    if not db_session:
-        raise HTTPException(status_code=404, detail="Stream session not found")
-    return db_session
+def hash_key(k: str) -> str:
+    return hashlib.sha256(k.encode()).hexdigest()
 
 
-@router.get("/active")
-async def get_active_streams(session: AsyncSession = Depends(get_session)):
-    from datetime import datetime
-    stmt = select(StreamSessionModel).where(StreamSessionModel.is_active == True)
-    result = await session.execute(stmt)
-    return [s async for s in result.scalars]
+# --------------------------------------------------------------------------- Creator-API
+
+@router.post("/keys", response_model=StreamKeyCreated, status_code=201)
+async def create_stream_key(req: StreamKeyCreate, user: CurrentUser = Depends(require(P.STREAM_MANAGE)),
+                            db: AsyncSession = Depends(get_db)):
+    if await db.get(Tenant, user.tenant_id) is None:
+        raise HTTPException(404, "Mandant nicht angelegt")
+    raw = "sk_" + secrets.token_urlsafe(24)
+    k = StreamKey(tenant_id=user.tenant_id, key_hash=hash_key(raw), label=req.label)
+    db.add(k)
+    await db.commit()
+    return StreamKeyCreated(id=k.id, label=k.label, revoked=False, created_at=k.created_at, stream_key=raw,
+                            rtmp_url=f"rtmp://{INGEST_HOST}:1935/live/{raw}",
+                            srt_url=f"srt://{INGEST_HOST}:6000?streamid=#!::r=live/{raw},m=publish")
 
 
-@router.post("/{session_id}/trigger")
-async def trigger_stream(session_id: UUID, session: AsyncSession = Depends(get_session)):
-    stmt = select(StreamSessionModel).where(StreamSessionModel.id == session_id)
-    db_session = (await session.execute(stmt)).scalars().first()
-    if not db_session:
-        raise HTTPException(status_code=404, detail="Stream not found")
-    
-    aggregator = await get_stream_aggregator()
-    result = await aggregator.trigger_stream(str(db_session.id), db_session.target_platforms)
-    db_session.is_active = True
-    db_session.viewer_count = result.get("viewer_count", 0)
-    await session.commit()
-    return result
+@router.get("/keys", response_model=list[StreamKeyOut])
+async def list_stream_keys(user: CurrentUser = Depends(require(P.STREAM_MANAGE)), db: AsyncSession = Depends(get_db)):
+    return (await db.execute(select(StreamKey).where(StreamKey.tenant_id == user.tenant_id))).scalars().all()
 
 
-@router.post("/{session_id}/stop")
-async def stop_stream(session_id: UUID, session: AsyncSession = Depends(get_session)):
-    stmt = select(StreamSessionModel).where(StreamSessionModel.id == session_id)
-    db_session = (await session.execute(stmt)).scalars().first()
-    if not db_session:
-        raise HTTPException(status_code=404, detail="Stream not found")
-    db_session.is_active = False
-    db_session.ended_at = datetime.utcnow()
-    await session.commit()
-    return {"status": "stopped", "id": session_id}
+@router.delete("/keys/{key_id}", status_code=204)
+async def revoke_stream_key(key_id: uuid.UUID, user: CurrentUser = Depends(require(P.STREAM_MANAGE)),
+                            db: AsyncSession = Depends(get_db)):
+    k = (await db.execute(select(StreamKey).where(StreamKey.id == key_id, StreamKey.tenant_id == user.tenant_id))
+         ).scalar_one_or_none()
+    if k is None:
+        raise HTTPException(404, "Stream-Key nicht gefunden")
+    k.revoked = True
+    await db.commit()
 
 
-@router.get("/{session_id}/stats")
-async def get_stream_stats(session_id: UUID, session: AsyncSession = Depends(get_session)):
-    stmt = select(StreamSessionModel).where(StreamSessionModel.id == session_id)
-    db_session = (await session.execute(stmt)).scalars().first()
-    if not db_session:
-        raise HTTPException(status_code=404, detail="Stream not found")
-    return db_session.stats
+async def build_targets(db: AsyncSession, tenant: Tenant) -> list[TargetOut]:
+    quota = QUOTAS[Tier(tenant.tier)]["targets"]
+    accounts = (await db.execute(select(PlatformAccount).where(
+        PlatformAccount.tenant_id == tenant.id, PlatformAccount.enabled.is_(True))
+        .order_by(PlatformAccount.created_at))).scalars().all()[:quota]
+    kms = kms_for(tenant)
+    out = []
+    for a in accounts:
+        creds = json.loads(unseal(kms, a.kek_ref, str(tenant.id), a.platform,
+                                  Sealed(a.encrypted_credentials, a.wrapped_dek, a.iv, a.auth_tag)))
+        base = a.ingest_url or DEFAULT_INGEST.get(Platform(a.platform))
+        if base:
+            out.append(TargetOut(platform=a.platform, account_username=a.account_username,
+                                 url=f"{base.rstrip('/')}/{creds['stream_key']}"))
+    return out
+
+
+@router.get("/targets", response_model=list[TargetOut])
+async def get_targets(user: CurrentUser = Depends(require(P.STREAM_MANAGE)), db: AsyncSession = Depends(get_db)):
+    """Aktive Restream-Ziele; Portal-Keys maskiert."""
+    t = await db.get(Tenant, user.tenant_id)
+    if t is None:
+        raise HTTPException(404, "Mandant nicht angelegt")
+    targets = await build_targets(db, t)
+    for x in targets:
+        base, _, key = x.url.rpartition("/")
+        x.url = f"{base}/{key[:3]}…{key[-2:]}" if len(key) > 6 else f"{base}/***"
+    return targets
+
+
+@router.get("/sessions", response_model=list[SessionOut])
+async def list_sessions(limit: int = 50, user: CurrentUser = Depends(require(P.STATS_READ)), db: AsyncSession = Depends(get_db)):
+    return (await db.execute(select(StreamSession).where(StreamSession.tenant_id == user.tenant_id)
+                             .order_by(StreamSession.started_at.desc()).limit(min(limit, 500)))).scalars().all()
+
+
+# --------------------------------------------------------------------------- SRS-Callbacks
+
+def _check_srs(request: Request, secret: str | None) -> None:
+    require_secret(secret, settings.SRS_CALLBACK_SECRET)
+    allowed = {ip.strip() for ip in settings.SRS_ALLOWED_IPS.split(",") if ip.strip()}
+    if allowed and request.client and request.client.host not in allowed:
+        raise HTTPException(403, "IP nicht freigegeben")
+
+
+@router.post("/verify")
+async def srs_hook(hook: SrsHook, request: Request, secret: str | None = Header(None, alias="X-SRS-Secret")):
+    """on_publish: Key + Quota pruefen. on_forward: Ziel-URLs liefern. on_unpublish: Session schliessen.
+    Antwortformat SRS: {"code": 0} = erlaubt, alles andere = abgelehnt."""
+    _check_srs(request, secret)
+    async with SessionLocal() as db:
+        key = (await db.execute(select(StreamKey).where(StreamKey.key_hash == hash_key(hook.stream),
+                                                        StreamKey.revoked.is_(False)))).scalar_one_or_none()
+        if key is None:
+            raise HTTPException(403, "Unbekannter oder widerrufener Stream-Key")
+        tenant = await db.get(Tenant, key.tenant_id)
+
+        if hook.action == "on_publish":
+            active = (await db.execute(select(func.count()).select_from(StreamSession).where(
+                StreamSession.tenant_id == tenant.id, StreamSession.ended_at.is_(None)))).scalar_one()
+            if active >= QUOTAS[Tier(tenant.tier)]["feeds"]:
+                raise HTTPException(429, "Maximale Anzahl paralleler Ingest-Feeds erreicht")
+            targets = await build_targets(db, tenant)
+            db.add(StreamSession(tenant_id=tenant.id, stream_key_id=key.id, srs_client_id=hook.client_id,
+                                 protocol="srt" if (hook.param or "").find("srt") >= 0 else "rtmp",
+                                 targets=[t.platform for t in targets]))
+            await db.commit()
+            return {"code": 0}
+
+        if hook.action == "on_forward":
+            return {"code": 0, "data": {"urls": [t.url for t in await build_targets(db, tenant)]}}
+
+        if hook.action == "on_unpublish":
+            sess = (await db.execute(select(StreamSession).where(
+                StreamSession.tenant_id == tenant.id, StreamSession.srs_client_id == hook.client_id,
+                StreamSession.ended_at.is_(None)))).scalar_one_or_none()
+            if sess:
+                sess.ended_at, sess.end_reason = utcnow(), "unpublish"
+                await db.commit()
+            return {"code": 0}
+    raise HTTPException(400, f"Unbekannte Aktion {hook.action}")
+
+
+@router.post("/overdue")
+async def overdue_sessions(request: Request, secret: str | None = Header(None, alias="X-SRS-Secret")):
+    """Wall-Time-Cap (24h): beendet ueberlange Sessions; Rueckgabe = SRS-Client-IDs zum Kicken."""
+    _check_srs(request, secret)
+    limit = utcnow() - timedelta(hours=settings.STREAM_WALL_TIME_HOURS)
+    async with SessionLocal() as db:
+        rows = (await db.execute(select(StreamSession).where(
+            StreamSession.ended_at.is_(None), StreamSession.started_at < limit))).scalars().all()
+        for s in rows:
+            s.ended_at, s.end_reason = utcnow(), "wall_time_cap"
+        await db.commit()
+        return {"kick_client_ids": [s.srs_client_id for s in rows]}
