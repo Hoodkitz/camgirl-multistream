@@ -11,7 +11,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import func, select, update
+from sqlalchemy import case, func, select, update
 
 from apps.core.enums import Role
 from apps.core.permissions import Permission as P
@@ -102,7 +102,9 @@ async def _check_password(db, u: m.User | None, password: str) -> bool:
     now = m.utcnow()
     n = (await db.execute(update(m.User).where(m.User.id == u.id,
                                                (m.User.locked_until.is_(None)) | (m.User.locked_until <= now))
-                          .values(failed_logins=m.User.failed_logins + 1).returning(m.User.failed_logins))).scalar()
+                          .values(failed_logins=case((m.User.locked_until.is_not(None), 1),  # lock expired: restart
+                                                     else_=m.User.failed_logins + 1),
+                                  locked_until=None).returning(m.User.failed_logins))).scalar()
     if n is not None and n >= MAX_FAILED:
         await db.execute(update(m.User).where(m.User.id == u.id)
                          .values(locked_until=now + timedelta(minutes=LOCK_MINUTES)))

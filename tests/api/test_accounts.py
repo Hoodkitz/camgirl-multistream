@@ -39,6 +39,21 @@ def test_lockout_after_failed_logins(client):
         client.post("/api/v1/auth/login", json={"email": "lock@example.com", "password": "wrong"})
     r = client.post("/api/v1/auth/login", json={"email": "lock@example.com", "password": "correct-horse-1"})
     assert r.status_code == 401  # locked accounts answer like a wrong password
+    import asyncio
+    from datetime import timedelta
+    from sqlalchemy import update
+    from apps.db import models as m
+    from apps.db.session import SystemSessionLocal
+
+    async def expire():
+        async with SystemSessionLocal() as db:
+            await db.execute(update(m.User).where(m.User.email == "lock@example.com")
+                             .values(locked_until=m.utcnow() - timedelta(seconds=1)))
+            await db.commit()
+    asyncio.run(expire())
+    assert client.post("/api/v1/auth/login", json={"email": "lock@example.com", "password": "wrong"}).status_code == 401
+    r = client.post("/api/v1/auth/login", json={"email": "lock@example.com", "password": "correct-horse-1"})
+    assert r.status_code == 200  # counter restarted after the lock expired
 
 
 def test_refresh_and_logout_everywhere(client):
