@@ -263,8 +263,11 @@ input:focus, select:focus {
 }
 
 /* Chat Layout */
-.chat-layout {
+.chat-layout.active {
     display: flex;
+}
+
+.chat-layout {
     flex-direction: column;
     height: calc(100vh - 130px); /* Adjust based on header/nav */
     padding: 1rem;
@@ -339,7 +342,13 @@ input:focus, select:focus {
 }
 
 .chat-input-form input {
-    flex: 1;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.chat-input-form button {
+    flex: 0 0 auto;
+    width: auto;
 }
 
 /* Utilities */

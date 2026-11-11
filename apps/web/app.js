@@ -5,7 +5,7 @@ const state = {
     token: localStorage.getItem('token') || null,
     refresh: localStorage.getItem('refresh') || null,
     tenantId: null,
-    lang: localStorage.getItem('lang') || 'en',
+    lang: localStorage.getItem('lang') || ((navigator.language || '').startsWith('de') ? 'de' : 'en'),
     ws: null,
     platforms: ['chaturbate', 'bongacams', 'stripchat', 'camsoda'],
     tenant: null
@@ -363,33 +363,39 @@ async function connectWs() {
     try {
         const tReq = await apiFetch(`${API_BASE}/ws/ticket`, { method: 'POST' });
         const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${wsProto}//${window.location.host}${API_BASE}/ws/chat?ticket=${tReq.ticket}`;
+        const wsUrl = `${wsProto}//${window.location.host}/ws/v1/chat?ticket=${encodeURIComponent(tReq.ticket)}`;
         
         state.ws = new WebSocket(wsUrl);
         state.ws.onmessage = (e) => {
             const data = JSON.parse(e.data);
-            if (data.type === 'chat' || data.type === 'tip') {
-                renderChatMessage(data);
+            if (data.type === 'chat_event' && data.event) {
+                state.lastEventId = Math.max(state.lastEventId || 0, data.event.id);
+                renderChatMessage(data.event);
             }
         };
-        state.ws.onclose = () => { state.ws = null; };
-        
-        // Setup ping
-        setInterval(() => {
-            if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-                state.ws.send(JSON.stringify({ type: 'ping' }));
+        // reconnect with replay (since_id) so nothing is lost while the connection was down
+        state.ws.onclose = () => {
+            state.ws = null;
+            if (state.token && $('#view-chat').classList.contains('active')) {
+                setTimeout(() => connectWs(), 3000);
             }
-        }, 25000);
-        
+        };
+
         loadChatInbox();
     } catch (e) {}
 }
 
 async function loadChatInbox() {
     try {
-        const events = await apiFetch(`${API_BASE}/chat/inbox`);
-        $('#chat-messages').innerHTML = '';
-        events.reverse().forEach(renderChatMessage);
+        const since = state.lastEventId ? `?since_id=${state.lastEventId}` : '';
+        const events = await apiFetch(`${API_BASE}/chat/inbox${since}`);
+        if (!since) $('#chat-messages').innerHTML = '';
+        events.forEach(ev => { state.lastEventId = Math.max(state.lastEventId || 0, ev.id); renderChatMessage(ev); });
+        if (!since && !events.length) {
+            $('#chat-messages').innerHTML = `<p class="help-text">${state.lang === 'de'
+                ? 'Noch keine Nachrichten. Sobald ein Portal verbunden ist und du live bist, erscheinen alle Chats hier.'
+                : 'No messages yet. Once a portal is connected and you are live, all chats appear here.'}</p>`;
+        }
         scrollToBottom();
     } catch (e) {}
 }
@@ -400,10 +406,12 @@ function renderChatMessage(msg) {
     const div = document.createElement('div');
     div.className = `chat-message ${isTip ? 'chat-tip' : ''}`;
     
-    const time = new Date(msg.timestamp).toLocaleTimeString();
-    const badge = `<span class="platform-badge platform-${msg.platform}">${msg.platform}</span>`;
-    const sender = escapeHTML(msg.sender.username || 'System');
-    const text = escapeHTML(msg.payload.message || (isTip ? `Tipped ${msg.payload.tokens_spent} tokens` : ''));
+    const time = new Date(msg.ts + (msg.ts.endsWith('Z') ? '' : 'Z')).toLocaleTimeString();
+    const badge = `<span class="platform-badge platform-${escapeHTML(msg.platform)}">${escapeHTML(msg.platform)}</span>`;
+    const sender = escapeHTML(msg.is_outgoing ? (msg.is_automated ? 'Auto' : 'Du') : (msg.sender_name || 'System'));
+    const text = escapeHTML(msg.message || (isTip ? `${msg.tokens} Tokens` : (msg.event_type === 'join' ? 'joined' : '')));
+    const help = container.querySelector('.help-text');
+    if (help) help.parentNode.removeChild(help);
     
     div.innerHTML = `
         <div class="chat-meta">
@@ -468,22 +476,29 @@ async function saveAutomation(e) {
 async function loadStats() {
     try {
         const stats = await apiFetch(`${API_BASE}/stats/overview`);
+        const L = state.lang === 'de';
         const c = $('#stats-content');
         
+        const plats = Object.entries(stats.plattformen || {});
+        const sum = (k) => plats.reduce((acc, [, d]) => acc + (d[k] || 0), 0);
         let html = '<div class="stats-grid">';
-        html += `<div class="stat-card"><div class="stat-label">Total Tokens</div><div class="stat-value">${stats.total_tokens}</div></div>`;
-        html += `<div class="stat-card"><div class="stat-label">Fiat Equivalent (USD)</div><div class="stat-value">$${stats.total_fiat_usd.toFixed(2)}</div></div>`;
-        html += `<div class="stat-card"><div class="stat-label">Total Chatter</div><div class="stat-value">${stats.total_chatter}</div></div>`;
+        const card = (label, value) => `<div class="stat-card"><div class="stat-label">${label}</div><div class="stat-value">${value}</div></div>`;
+        html += card(L ? 'Umsatz (30 Tage)' : 'Revenue (30 days)', `$${(stats.umsatz_usd_gesamt || 0).toFixed(2)}`);
+        html += card('Tokens', sum('tokens'));
+        html += card(L ? 'Aktive Chatter' : 'Active chatters', sum('aktive_chatter'));
+        html += card(L ? 'Stream-Stunden' : 'Stream hours', stats.stream_stunden);
+        html += card(L ? 'Umsatz / Stunde' : 'Revenue / hour', stats.umsatz_pro_stunde_usd != null ? `$${stats.umsatz_pro_stunde_usd.toFixed(2)}` : '-');
         html += `</div>`;
-        
-        if (Object.keys(stats.per_platform).length > 0) {
-            html += '<h4>Per Platform Tokens</h4><ul class="item-list">';
-            for (const [p, data] of Object.entries(stats.per_platform)) {
-                html += `<li><span class="platform-badge platform-${p}">${p}</span> <strong>${data.tokens} tokens</strong></li>`;
+        if (plats.length) {
+            html += `<h4>${L ? 'Pro Portal' : 'Per portal'}</h4><ul class="item-list">`;
+            for (const [p, d] of plats) {
+                const top = d.top_spender.map(t => `${escapeHTML(t.name)} (${t.tokens})`).join(', ');
+                html += `<li><span class="platform-badge platform-${escapeHTML(p)}">${escapeHTML(p)}</span>
+                    <strong>${d.tokens} Tokens · $${d.umsatz_usd.toFixed(2)}</strong> · ${d.tips} Tips · ${d.nachrichten} ${L ? 'Nachrichten' : 'messages'}
+                    ${top ? `<br><small>Top: ${top}</small>` : ''}</li>`;
             }
             html += '</ul>';
         }
-        
         c.innerHTML = html;
     } catch (e) {}
 }
