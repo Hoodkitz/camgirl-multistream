@@ -32,17 +32,24 @@ class CredentialCreate(BaseModel):
     @field_validator("ingest_url")
     @classmethod
     def _known_ingest_host(cls, v):
+        """Nur bekannte Portal-Hosts; URL wird aus den gepruefen Teilen neu aufgebaut (kein Parser-Differential)."""
         if v is None:
             return v
+        import re
         from urllib.parse import urlsplit
 
         from apps.core.enums import allowed_ingest_hosts
+        if re.search(r"[\s\x00-\x1f\x7f@\\?#]", v):
+            raise ValueError("Ingest-URL enthaelt unzulaessige Zeichen")
         u = urlsplit(v)
-        if u.scheme not in ("rtmp", "rtmps") or (u.hostname or "").lower() not in allowed_ingest_hosts():
+        host = (u.hostname or "").lower()
+        if u.scheme not in ("rtmp", "rtmps") or host not in allowed_ingest_hosts() or u.username or u.password:
             raise ValueError("Ingest-URL muss rtmp(s) zu einem bekannten Portal-Host sein")
         if u.port not in (None, 1935, 443):
             raise ValueError("Nur Port 1935 oder 443 erlaubt")
-        return v
+        if not re.fullmatch(r"(/[A-Za-z0-9._~-]+)*/?", u.path or ""):
+            raise ValueError("Ungueltiger Pfad")
+        return f"{u.scheme}://{host}{f':{u.port}' if u.port else ''}{u.path}"
 
 
 class CredentialOut(ORM):

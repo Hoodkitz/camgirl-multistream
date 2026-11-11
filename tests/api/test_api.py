@@ -223,7 +223,8 @@ def test_ssrf_schutz(client, tenant):
                 "https://[::1]/x", "https://169.254.169.254/latest"):
         assert client.put("/api/v1/automation", headers=H("owner"), json={"obs_webhook_url": url}).status_code == 422, url
     for url in ("rtmp://10.0.0.1/live", "rtmp://evil.example.com/live", "http://s-sd.stripst.com/ext",
-                "rtmp://s-sd.stripst.com:22/ext"):
+                "rtmp://s-sd.stripst.com:22/ext", "rtmp://user@s-sd.stripst.com/ext", "rtmp://s-sd.stripst.com/ext?x=1",
+                "rtmp://s-sd.stripst.com/ext#frag", "rtmp://s-sd.stripst.com\\@evil.com/ext", "rtmp://s-sd.stripst.com/e xt"):
         r = client.post("/api/v1/credentials", headers=H("owner"), json={
             "platform": "stripchat", "account_username": "x", "stream_key": "abcd", "ingest_url": url})
         assert r.status_code == 422, url
@@ -241,3 +242,26 @@ def test_netguard_beim_senden():
     with pytest.raises(ValueError):
         assert_public_host("localhost")
     assert assert_public_host("1.1.1.1") == ["1.1.1.1"]
+
+
+def test_obs_webhook_wird_an_gepruefte_ip_gesendet(monkeypatch):
+    import asyncio
+
+    import httpx
+
+    from apps.db.models import Outbox
+    from apps.domain import netguard
+    from apps.services import outbox as ob
+    seen = {}
+
+    async def fake_post(self, url, **kw):
+        seen["url"], seen["kw"] = url, kw
+        return httpx.Response(200, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(netguard, "assert_public_host", lambda h, p=443: ["93.184.216.34"])
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    e = Outbox(tenant_id=uuid.uuid4(), kind="obs_webhook", payload={"url": "https://obs.example.com/hook", "total": 1})
+    asyncio.run(ob._obs_webhook(e))
+    assert seen["url"] == "https://93.184.216.34:443/hook"
+    assert seen["kw"]["headers"]["Host"] == "obs.example.com"
+    assert seen["kw"]["extensions"]["sni_hostname"] == "obs.example.com"
