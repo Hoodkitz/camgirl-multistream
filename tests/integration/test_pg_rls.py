@@ -24,6 +24,7 @@ async def _scenario():
         a, b = uuid.uuid4(), uuid.uuid4()
         now = datetime.utcnow()
         for t in (a, b):
+            await _as(conn, t)  # a tenant row can only be created under its own context
             await conn.execute("INSERT INTO tenants (id, name, tier, kek_ref, created_at) VALUES ($1, 'T', 'standard', 'k', $2)", t, now)
         await _as(conn, a)
         await conn.execute("INSERT INTO stream_keys (id, tenant_id, key_hash, label, revoked, created_at) VALUES ($1, $2, md5(random()::text), 'x', false, $3)", uuid.uuid4(), a, now)
@@ -33,6 +34,8 @@ async def _scenario():
         with pytest.raises(asyncpg.exceptions.InsufficientPrivilegeError):
             await conn.execute("INSERT INTO stream_keys (id, tenant_id, key_hash, label, revoked, created_at) VALUES ($1, $2, md5(random()::text), 'x', false, $3)", uuid.uuid4(), a, now)  # writing into another tenant
         await _as(conn, None)
+        tenants_visible = await conn.fetchval("SELECT count(*) FROM tenants")
+        assert tenants_visible == 0
         rows_without_context = await conn.fetchval("SELECT count(*) FROM stream_keys")
         return rows_a, rows_seen_by_b, rows_without_context
     finally:
