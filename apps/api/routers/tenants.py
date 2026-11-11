@@ -52,7 +52,7 @@ async def delete_me(confirm: str = Header(..., alias="X-Confirm-Delete"),
     if not shredded:
         raise HTTPException(500, "Schluesselvernichtung fehlgeschlagen, Loeschung abgebrochen")
     for model in (m.ChatEvent, m.GreetLog, m.Outbox, m.StreamSession, m.StreamKey, m.PlatformAccount,
-                  m.AutomationSettings):
+                  m.AutomationSettings, m.User):
         await db.execute(delete(model).where(model.tenant_id == t.id))
     await db.delete(t)
     await db.commit()

@@ -1,9 +1,9 @@
 const API_BASE = '/api/v1';
-const DEV_API_BASE = '/dev';
 
 // State
 const state = {
     token: localStorage.getItem('token') || null,
+    refresh: localStorage.getItem('refresh') || null,
     tenantId: null,
     lang: localStorage.getItem('lang') || 'en',
     ws: null,
@@ -17,12 +17,12 @@ const translations = {
         login_title: 'Login / Register',
         login_tab: 'Login',
         register_tab: 'Register',
-        sub_id: 'Sub (User ID)',
-        tenant_id: 'Tenant ID (UUID)',
-        login_btn: 'Login (Dev Token)',
-        tenant_name: 'Tenant Name',
-        register_help: 'Requires Dev Token first to set owner roles.',
-        register_btn: 'Register Tenant',
+        email: 'E-Mail',
+        password: 'Password',
+        password_new: 'Password (min. 10 characters)',
+        login_btn: 'Login',
+        tenant_name: 'Studio / Model name',
+        register_btn: 'Create account',
         logout: 'Logout',
         nav_dashboard: 'Dashboard',
         nav_chat: 'Chat Inbox',
@@ -51,19 +51,19 @@ const translations = {
         confirm_name: 'Type Tenant Name to confirm:',
         delete_btn: 'Permanently Delete',
         revoke: 'Revoke',
-        reauth_prompt: 'Please re-enter your Dev Token Sub to confirm (mock re-auth for 5m requirement):',
+        reauth_prompt: 'Please enter your password to confirm the deletion:',
         no_items: 'No items found.'
     },
     de: {
         login_title: 'Anmelden / Registrieren',
         login_tab: 'Anmelden',
         register_tab: 'Registrieren',
-        sub_id: 'Sub (Benutzer-ID)',
-        tenant_id: 'Mandanten-ID (UUID)',
-        login_btn: 'Anmelden (Dev Token)',
-        tenant_name: 'Mandantenname',
-        register_help: 'Erfordert zuerst Dev Token für Owner-Rechte.',
-        register_btn: 'Mandant registrieren',
+        email: 'E-Mail',
+        password: 'Passwort',
+        password_new: 'Passwort (mind. 10 Zeichen)',
+        login_btn: 'Anmelden',
+        tenant_name: 'Studio- / Modelname',
+        register_btn: 'Konto erstellen',
         logout: 'Abmelden',
         nav_dashboard: 'Übersicht',
         nav_chat: 'Chat-Postfach',
@@ -92,7 +92,7 @@ const translations = {
         confirm_name: 'Mandantenname zur Bestätigung eingeben:',
         delete_btn: 'Endgültig löschen',
         revoke: 'Widerrufen',
-        reauth_prompt: 'Bitte geben Sie Ihre Dev Token Sub erneut ein (mock re-auth für 5m Anforderung):',
+        reauth_prompt: 'Bitte Passwort eingeben, um die Löschung zu bestätigen:',
         no_items: 'Keine Einträge gefunden.'
     }
 };
@@ -122,14 +122,35 @@ function showToast(msg, type = 'success') {
     setTimeout(() => t.classList.add('hidden'), 3000);
 }
 
-async function apiFetch(endpoint, options = {}) {
+function saveTokens(res) {
+    state.token = res.access_token;
+    state.refresh = res.refresh_token;
+    localStorage.setItem('token', state.token);
+    localStorage.setItem('refresh', state.refresh);
+}
+
+let refreshing = null;
+async function tryRefresh() {
+    if (!state.refresh) return false;
+    refreshing = refreshing || fetch(`${API_BASE}/auth/refresh`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: state.refresh })
+    }).then(async r => { if (!r.ok) return false; saveTokens(await r.json()); return true; })
+      .catch(() => false).finally(() => { setTimeout(() => { refreshing = null; }, 0); });
+    return refreshing;
+}
+
+async function apiFetch(endpoint, options = {}, retried = false) {
     const headers = { 'Content-Type': 'application/json' };
     if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
-    
+
     try {
         const res = await fetch(endpoint, { ...options, headers: { ...headers, ...options.headers } });
         if (!res.ok) {
-            if (res.status === 401) { logout(); throw new Error('Unauthorized'); }
+            if (res.status === 401 && !retried && !endpoint.includes('/auth/') && await tryRefresh()) {
+                return apiFetch(endpoint, options, true);
+            }
+            if (res.status === 401 && !endpoint.includes('/auth/')) { logout(); throw new Error('Unauthorized'); }
             const err = await res.json().catch(() => ({ detail: res.statusText }));
             throw new Error(err.detail || 'API Error');
         }
@@ -195,34 +216,35 @@ async function init() {
 
 async function login(e) {
     e.preventDefault();
-    const sub = $('#login-sub').value;
-    const tenant_id = $('#login-tenant').value;
     try {
-        const res = await apiFetch(`${DEV_API_BASE}/token`, {
+        const res = await apiFetch(`${API_BASE}/auth/login`, {
             method: 'POST',
-            body: JSON.stringify({ sub, tenant_id, roles: ["owner"] })
+            body: JSON.stringify({ email: $('#login-email').value, password: $('#login-password').value })
         });
-        state.token = res.access_token;
-        localStorage.setItem('token', state.token);
+        saveTokens(res);
+        $('#login-password').value = '';
         init();
     } catch (e) {}
 }
 
 async function register(e) {
     e.preventDefault();
-    if (!state.token) { showToast('Login first to get a token', 'error'); return; }
     try {
-        await apiFetch(`${API_BASE}/tenants`, {
+        const res = await apiFetch(`${API_BASE}/auth/register`, {
             method: 'POST',
-            body: JSON.stringify({ name: $('#reg-name').value })
+            body: JSON.stringify({ tenant_name: $('#reg-name').value, email: $('#reg-email').value,
+                                   password: $('#reg-password').value })
         });
-        showToast('Registered successfully');
+        saveTokens(res);
+        $('#reg-password').value = '';
         init();
     } catch (e) {}
 }
 
 function logout() {
     state.token = null;
+    state.refresh = null;
+    localStorage.removeItem('refresh');
     state.tenantId = null;
     state.tenant = null;
     localStorage.removeItem('token');
@@ -467,10 +489,10 @@ async function loadStats() {
 }
 
 // Settings
-async function checkoutStripe() {
+async function checkoutStripe(tier = 'pro') {
     try {
-        // Just mock calling an endpoint if it existed, or alert
-        showToast('Stripe checkout integration not implemented in this demo frontend.', 'error');
+        const res = await apiFetch(`${API_BASE}/billing/checkout`, { method: 'POST', body: JSON.stringify({ tier }) });
+        window.location.href = res.url;
     } catch (e) {}
 }
 
@@ -478,17 +500,15 @@ async function deleteAccount(e) {
     e.preventDefault();
     const confirmName = $('#delete-confirm-name').value;
 
-    // Re-Authenticate physically
-    const password = prompt(translations[state.lang].reauth_prompt || 'Please re-enter your Dev Token Sub to confirm (mock re-auth for 5m requirement):');
+    // Re-authentication: the server only deletes with a login younger than 5 minutes
+    const password = prompt(translations[state.lang].reauth_prompt);
     if (!password) { showToast('Re-authentication required', 'error'); return; }
-    
+
     try {
-        const authRes = await apiFetch(`${DEV_API_BASE}/token`, {
+        saveTokens(await apiFetch(`${API_BASE}/auth/reauth`, {
             method: 'POST',
-            body: JSON.stringify({ sub: password, tenant_id: state.tenantId, roles: ["owner"] })
-        });
-        state.token = authRes.access_token;
-        localStorage.setItem('token', state.token);
+            body: JSON.stringify({ password })
+        }));
 
         await apiFetch(`${API_BASE}/tenants/me`, {
             method: 'DELETE',

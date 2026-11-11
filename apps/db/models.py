@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import JSON, Index, text, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -133,3 +133,19 @@ class WebhookInbox(Base):
     payload: Mapped[dict] = mapped_column(JSON)
     received_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class User(Base):
+    """Built-in accounts (self-service sign-up). Deployments with an external IdP can ignore this table."""
+    __tablename__ = "users"
+    __table_args__ = (Index("ix_users_email_lower", text("lower(email)"), unique=True),)
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = _tenant_fk()
+    email: Mapped[str] = mapped_column(String(255), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(20), default="owner")
+    failed_logins: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime)
+    token_version: Mapped[int] = mapped_column(Integer, default=0)  # bump = all refresh tokens revoked
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

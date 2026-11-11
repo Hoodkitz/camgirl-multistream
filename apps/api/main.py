@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from apps.api.routers import automation, chat, credentials, stats, streams, system, tenants
+from apps.api.routers import auth, automation, billing, chat, credentials, stats, streams, system, tenants
 from apps.core.config import settings
 from apps.db.session import init_models
 from apps.domain.ratelimit import TokenBucket
@@ -45,7 +45,7 @@ async def rate_limit_and_headers(request: Request, call_next):
     return resp
 
 
-for r in (tenants, credentials, streams, chat, automation, stats, system):
+for r in (auth, billing, tenants, credentials, streams, chat, automation, stats, system):
     app.include_router(r.router)
 if settings.dev_endpoints_enabled:
     from apps.api.routers import dev

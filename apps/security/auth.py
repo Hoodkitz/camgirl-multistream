@@ -45,12 +45,37 @@ def issue_token(sub: str, tenant_id: str | uuid.UUID, roles: list[str], minutes:
     return jwt.encode(claims, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
+REFRESH_DAYS = 30
+
+
+def issue_refresh_token(sub: str, tenant_id, version: int, auth_time: int) -> str:
+    now = datetime.now(timezone.utc)
+    return jwt.encode({"typ": "refresh", "sub": sub, "tenant_id": str(tenant_id), "ver": version,
+                       "auth_time": auth_time, "iss": settings.OIDC_ISSUER, "aud": settings.JWT_AUDIENCE + ":refresh",
+                       "iat": now, "exp": now + timedelta(days=REFRESH_DAYS)},
+                      settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+
+
+def decode_refresh_token(token: str) -> dict:
+    try:
+        c = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM],
+                       audience=settings.JWT_AUDIENCE + ":refresh", issuer=settings.OIDC_ISSUER,
+                       options={"require": ["exp", "sub", "aud", "iss"]})
+        if c.get("typ") != "refresh":
+            raise ValueError("not a refresh token")
+        return c
+    except (jwt.PyJWTError, ValueError) as e:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Sitzung abgelaufen – bitte neu anmelden") from e
+
+
 def decode_token(token: str) -> CurrentUser:
     try:
         c = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM],
                        audience=settings.JWT_AUDIENCE, issuer=settings.OIDC_ISSUER,
                        options={"require": ["exp", "sub", "aud", "iss"]})
         tenant = uuid.UUID(c["tenant_id"])
+        if c.get("typ") == "refresh":
+            raise ValueError("refresh token used as access token")
     except (jwt.PyJWTError, KeyError, ValueError) as e:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Ungueltiges Token",
                             headers={"WWW-Authenticate": "Bearer"}) from e

@@ -18,22 +18,29 @@
                 </div>
                 <form id="login-form" class="auth-form active" onsubmit="app.login(event)">
                     <div class="form-group">
-                        <label data-i18n="sub_id">Sub (User ID)</label>
-                        <input type="text" id="login-sub" required>
+                        <label for="login-email" data-i18n="email">E-Mail</label>
+                        <input type="email" id="login-email" autocomplete="username" required>
                     </div>
                     <div class="form-group">
-                        <label data-i18n="tenant_id">Tenant ID (UUID)</label>
-                        <input type="text" id="login-tenant" required>
+                        <label for="login-password" data-i18n="password">Password</label>
+                        <input type="password" id="login-password" autocomplete="current-password" required>
                     </div>
-                    <button type="submit" class="btn btn-primary" data-i18n="login_btn">Login (Dev Token)</button>
+                    <button type="submit" class="btn btn-primary" data-i18n="login_btn">Login</button>
                 </form>
                 <form id="register-form" class="auth-form" onsubmit="app.register(event)">
                     <div class="form-group">
-                        <label data-i18n="tenant_name">Tenant Name</label>
-                        <input type="text" id="reg-name" required>
+                        <label for="reg-name" data-i18n="tenant_name">Studio / Model name</label>
+                        <input type="text" id="reg-name" maxlength="255" required>
                     </div>
-                    <p class="help-text" data-i18n="register_help">Requires Dev Token first to set owner roles.</p>
-                    <button type="submit" class="btn btn-primary" data-i18n="register_btn">Register Tenant</button>
+                    <div class="form-group">
+                        <label for="reg-email" data-i18n="email">E-Mail</label>
+                        <input type="email" id="reg-email" autocomplete="username" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="reg-password" data-i18n="password_new">Password (min. 10 characters)</label>
+                        <input type="password" id="reg-password" minlength="10" autocomplete="new-password" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary" data-i18n="register_btn">Create account</button>
                 </form>
             </div>
         </section>

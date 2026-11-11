@@ -2,10 +2,13 @@
 
 Ein Feed per OBS → gleichzeitig an alle Cam-Portale. Alle Portal-Chats gebündelt in einer App.
 
-## Was funktioniert (v0.2)
+## Was funktioniert (v0.3)
 
 | Bereich | Umsetzung |
 |---|---|
+| **Konten** | `POST /api/v1/auth/register` legt Konto + Mandant an (Argon2id), `login`, `refresh` (30 Tage, widerrufbar über `logout-all`), `reauth` (frischer Login für Kontolöschung), Team: Inhaber legt Creator/Agent/Audit an. Sperre nach 5 Fehlversuchen (15 min), kein User-Enumeration-Timing. Alternativ externer OIDC-IdP. |
+| **Web-App** | `/app` – Dashboard (DE/EN): Zugangsdaten, Stream-Keys, Live-Sessions, Chat-Posteingang (WebSocket), Automationen, Statistik, Abo, Konto löschen. |
+| **Abo-Kauf** | `POST /api/v1/billing/checkout` (Stripe Checkout, Tarif pro/agency), `POST /api/v1/billing/portal` (Kundenportal). Der Tarif wird ausschließlich über den signierten Webhook gesetzt. |
 | **Portal-Zugangsdaten** | `POST /api/v1/credentials` – AES-256-GCM Envelope Encryption, DEK pro Eintrag, AAD = `tenant:platform`, KEK pro Mandant. Klartext verlässt nie die API. |
 | **Stream-Keys** | `POST /api/v1/streams/keys` – Key wird einmalig angezeigt, nur SHA-256 gespeichert, widerrufbar. RTMP- und SRT-URL. |
 | **SRS-Integration** | `POST /api/v1/streams/verify` (Header `X-SRS-Secret`, IP-Allowlist): `on_publish` (Key + Quota), `on_forward` (Ziel-URLs mit entschlüsselten Portal-Keys), `on_unpublish`. `POST /api/v1/streams/overdue` = 24h-Wall-Time-Cap. |
@@ -31,9 +34,15 @@ ENV=dev .venv/bin/uvicorn apps.api.main:app --reload   # /docs, /dev/token
 docker build -t camgirl-multistream .
 ```
 
+Produktion: `alembic upgrade head` als DB-Owner (legt Schema, RLS und die Rolle `application_role` an),
+dann `ALTER ROLE application_role LOGIN PASSWORD '…'`; die App verbindet mit `DATABASE_URL` als `application_role`,
+Systemaufgaben (Webhooks, Outbox) mit `SYSTEM_DATABASE_URL` als Rolle mit `BYPASSRLS`.
+Pflicht-Variablen: `JWT_SECRET`, `SRS_CALLBACK_SECRET`, `CONNECTOR_SECRET`, `STRIPE_WEBHOOK_SECRET`, `OBS_WEBHOOK_SECRET`,
+`LOCAL_KMS_MASTER_KEY`; für Abos `STRIPE_SECRET_KEY`, `STRIPE_PRICE_PRO`, `STRIPE_PRICE_AGENCY`, `PUBLIC_BASE_URL`.
+
 ## Noch offen
 
 - Echte Portal-Connectoren (Chat lesen/schreiben je Portal) – aktuell `RecordingConnector`
 - SRS-Deployment (Konfig mit `http_hooks` + `forward backend` auf `/api/v1/streams/verify`)
 - Cloud-KMS statt `LocalKMS`, Redis statt In-Memory-Bus/Rate-Limit für Mehrknotenbetrieb
-- Alembic-Migrationen, Mobile-App (React Native/Flutter), Push-Notifications
+- Mobile-App (React Native/Flutter), Push-Notifications, E-Mail-Verifizierung/Passwort-vergessen (braucht Mail-Anbieter)
