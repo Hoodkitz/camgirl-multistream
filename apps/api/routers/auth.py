@@ -98,20 +98,22 @@ async def _check_password(db, u: m.User | None, password: str) -> bool:
         except VerificationError:
             pass
         return False
-    if u.locked_until and u.locked_until > m.utcnow():
-        raise HTTPException(429, "Zu viele Fehlversuche – Konto vorübergehend gesperrt")
+    # Reserve the attempt atomically (refused while locked): parallel guesses cannot exceed MAX_FAILED.
+    now = m.utcnow()
+    n = (await db.execute(update(m.User).where(m.User.id == u.id,
+                                               (m.User.locked_until.is_(None)) | (m.User.locked_until <= now))
+                          .values(failed_logins=m.User.failed_logins + 1).returning(m.User.failed_logins))).scalar()
+    if n is not None and n >= MAX_FAILED:
+        await db.execute(update(m.User).where(m.User.id == u.id)
+                         .values(locked_until=now + timedelta(minutes=LOCK_MINUTES)))
+    await db.commit()
     try:
         _ph.verify(u.password_hash, password)
     except (VerificationError, InvalidHashError):
-        # atomic increment: parallel guesses cannot all read the same counter value
-        n = (await db.execute(update(m.User).where(m.User.id == u.id)
-                              .values(failed_logins=m.User.failed_logins + 1)
-                              .returning(m.User.failed_logins))).scalar_one()
-        if n >= MAX_FAILED:
-            await db.execute(update(m.User).where(m.User.id == u.id)
-                             .values(locked_until=m.utcnow() + timedelta(minutes=LOCK_MINUTES), failed_logins=0))
-        await db.commit()
         return False
+    if n is None or n >= MAX_FAILED:
+        return False  # locked: same answer as a wrong password (no lock/enumeration oracle)
+    await db.refresh(u)
     if _ph.check_needs_rehash(u.password_hash):
         u.password_hash = _ph.hash(password)
     u.failed_logins = 0

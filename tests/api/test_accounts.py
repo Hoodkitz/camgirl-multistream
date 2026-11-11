@@ -38,7 +38,7 @@ def test_lockout_after_failed_logins(client):
     for _ in range(5):
         client.post("/api/v1/auth/login", json={"email": "lock@example.com", "password": "wrong"})
     r = client.post("/api/v1/auth/login", json={"email": "lock@example.com", "password": "correct-horse-1"})
-    assert r.status_code == 429
+    assert r.status_code == 401  # locked accounts answer like a wrong password
 
 
 def test_refresh_and_logout_everywhere(client):

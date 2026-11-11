@@ -58,7 +58,11 @@ async def process_inbox() -> int:
                                          "customer.subscription.deleted") and meta.get("tenant_id"):
                 import uuid
                 t = await db.get(Tenant, uuid.UUID(meta["tenant_id"]))
+                created = int(w.payload.get("created") or 0)
+                if t and created < (t.billing_event_at or 0):
+                    t = None  # older than the state already applied (Stripe does not guarantee ordering)
                 if t:
+                    t.billing_event_at = created
                     active = obj.get("status") in ("active", "trialing") and w.payload["type"] != "customer.subscription.deleted"
                     tier = _tier_from_prices(obj)  # never trust metadata: plan switches in the portal keep old metadata
                     t.tier = tier.value if active and tier else Tier.STANDARD.value

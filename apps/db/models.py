@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Index, text, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import JSON, BigInteger, Index, text, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -25,6 +25,7 @@ class Tenant(Base):
     tier: Mapped[str] = mapped_column(String(20), default="standard")
     kek_ref: Mapped[str] = mapped_column(String(255))
     stripe_customer_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    billing_event_at: Mapped[int | None] = mapped_column(BigInteger)  # 'created' of last applied Stripe event
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
