@@ -1,5 +1,6 @@
 """Verarbeitung normalisierter Portal-Events: Persistenz, Automationen, Bus."""
 import uuid
+from datetime import timezone
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -19,7 +20,7 @@ def event_dict(e: ChatEvent) -> dict:
 async def ingest(db: AsyncSession, tenant_id: uuid.UUID, ev) -> tuple[ChatEvent | None, list[str]]:
     """Gibt (event, ausgeloeste_aktionen) zurueck; event=None bei Duplikat (idempotent)."""
     row = ChatEvent(tenant_id=tenant_id, event_id=ev.event_id, stream_id=ev.stream_id, platform=ev.platform.value,
-                    event_type=ev.event_type.value, ts=ev.timestamp.replace(tzinfo=None),
+                    event_type=ev.event_type.value, ts=(ev.timestamp.astimezone(timezone.utc).replace(tzinfo=None) if ev.timestamp.tzinfo else ev.timestamp),
                     sender_id=ev.sender.platform_user_id, sender_name=ev.sender.username,
                     message=ev.payload.message, tokens=ev.payload.tokens_spent, fiat_usd=ev.payload.fiat_equivalent_usd)
     db.add(row)

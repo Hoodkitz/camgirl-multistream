@@ -277,3 +277,36 @@ def test_obs_webhook_wird_an_gepruefte_ip_gesendet(monkeypatch):
     assert seen["url"] == "https://93.184.216.34:443/hook"
     assert seen["kw"]["headers"]["Host"] == "obs.example.com"
     assert seen["kw"]["extensions"]["sni_hostname"] == "obs.example.com"
+
+
+def test_malformed_stripe_event_does_not_block_others(client, tenant, monkeypatch):
+    from apps.core.config import settings
+    monkeypatch.setattr(settings, "STRIPE_PRICE_PRO", "price_pro")
+    tid, H = tenant
+    bad = {"id": "evt_bad", "type": "customer.subscription.updated", "created": 1,
+           "data": {"object": {"status": "active", "metadata": {"tenant_id": "not-a-uuid"}}}}
+    good = {"id": "evt_good", "type": "customer.subscription.updated", "created": 2,
+            "data": {"object": {"status": "active", "customer": "cus_9", "metadata": {"tenant_id": tid},
+                                "items": {"data": [{"price": {"id": "price_pro"}}]}}}}
+    for ev in (bad, good):
+        body = json.dumps(ev).encode()
+        r = client.post("/api/v1/webhooks/stripe", content=body,
+                        headers={"Stripe-Signature": sign("whsec_dev", body), "Content-Type": "application/json"})
+        assert r.status_code == 200
+    assert client.get("/api/v1/tenants/me", headers=H("owner")).json()["tier"] == "pro"
+
+
+def test_revoking_live_key_frees_feed_quota(client, tenant):
+    tid, H = tenant
+    add_cred(client, H, "stripchat", "luna", "SC-KEY-1")
+    sk = client.post("/api/v1/streams/keys", headers=H("creator"), json={"label": "OBS"}).json()
+    hook = {"action": "on_publish", "client_id": "live1", "stream": sk["stream_key"]}
+    assert client.post("/api/v1/streams/verify", headers=SRS, json=hook).json() == {"code": 0}
+    client.delete(f"/api/v1/streams/keys/{sk['id']}", headers=H("owner"))
+    s = client.get("/api/v1/streams/sessions", headers=H("owner")).json()
+    assert s[0]["end_reason"] == "key_revoked"
+    # encoder stops later: unpublish of the revoked key is still accepted
+    assert client.post("/api/v1/streams/verify", headers=SRS, json={**hook, "action": "on_unpublish"}).json()["code"] == 0
+    sk2 = client.post("/api/v1/streams/keys", headers=H("creator"), json={"label": "Neu"}).json()
+    assert client.post("/api/v1/streams/verify", headers=SRS,
+                       json={**hook, "client_id": "live2", "stream": sk2["stream_key"]}).json() == {"code": 0}

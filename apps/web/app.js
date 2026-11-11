@@ -248,7 +248,14 @@ function logout() {
     state.tenantId = null;
     state.tenant = null;
     localStorage.removeItem('token');
-    if (state.ws) { state.ws.close(); state.ws = null; }
+    if (state.ws) { state.ws.onclose = null; state.ws.close(); state.ws = null; }
+    // nothing of the previous account may remain visible for the next person on this device
+    state.lastEventId = null;
+    state.automation = null;
+    ['#chat-messages', '#credentials-list', '#stream-keys-list', '#sessions-list', '#stats-content'].forEach(sel => {
+        const el = $(sel); if (el) el.innerHTML = '';
+    });
+    const nk = $('#new-stream-key-result'); if (nk) { nk.innerHTML = ''; nk.classList.add('hidden'); }
     $('#auth-section').classList.add('active');
     $('#main-section').classList.remove('active');
 }
@@ -453,6 +460,7 @@ async function loadAutomation() {
         $('#auto-greet-cooldown').value = auto.greet_cooldown_hours;
         $('#auto-tip-goal').value = auto.tip_goal_tokens || '';
         $('#auto-obs-webhook').value = auto.obs_webhook_url || '';
+        state.automation = auto;  // keep fields the form does not show (platform filter, goal label)
     } catch (e) {}
 }
 
@@ -462,7 +470,8 @@ async function saveAutomation(e) {
         greet_enabled: $('#auto-greet-enabled').checked,
         greet_template: $('#auto-greet-template').value,
         greet_cooldown_hours: parseInt($('#auto-greet-cooldown').value, 10),
-        greet_platforms: state.platforms, // Simplified
+        greet_platforms: (state.automation && state.automation.greet_platforms) || [],  // [] = all platforms
+        tip_goal_label: (state.automation && state.automation.tip_goal_label) || null,
         tip_goal_tokens: $('#auto-tip-goal').value ? parseInt($('#auto-tip-goal').value, 10) : null,
         obs_webhook_url: $('#auto-obs-webhook').value || null
     };

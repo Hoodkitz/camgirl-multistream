@@ -105,16 +105,22 @@ async def _check_password(db, u: m.User | None, password: str) -> bool:
                           .values(failed_logins=case((m.User.locked_until.is_not(None), 1),  # lock expired: restart
                                                      else_=m.User.failed_logins + 1),
                                   locked_until=None).returning(m.User.failed_logins))).scalar()
-    if n is not None and n >= MAX_FAILED:
+    await db.commit()
+    if n is None:
+        return False  # locked: same answer as a wrong password
+    if n > MAX_FAILED:  # parallel guesses raced past the limit: lock (expires, then the counter restarts)
         await db.execute(update(m.User).where(m.User.id == u.id)
                          .values(locked_until=now + timedelta(minutes=LOCK_MINUTES)))
-    await db.commit()
+        await db.commit()
+        return False
     try:
         _ph.verify(u.password_hash, password)
     except (VerificationError, InvalidHashError):
+        if n >= MAX_FAILED:  # this was the last allowed failure: lock now
+            await db.execute(update(m.User).where(m.User.id == u.id)
+                             .values(locked_until=now + timedelta(minutes=LOCK_MINUTES)))
+            await db.commit()
         return False
-    if n is None or n >= MAX_FAILED:
-        return False  # locked: same answer as a wrong password (no lock/enumeration oracle)
     await db.refresh(u)
     if _ph.check_needs_rehash(u.password_hash):
         u.password_hash = _ph.hash(password)

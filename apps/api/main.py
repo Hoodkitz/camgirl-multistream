@@ -11,9 +11,12 @@ from apps.api.routers import auth, automation, billing, chat, credentials, stats
 from apps.core.config import settings
 from apps.db.session import init_models
 from apps.domain.ratelimit import TokenBucket
+from apps.security.auth import decode_token
 
 VERSION = "0.2.0"
 limiter = TokenBucket(capacity=settings.RATE_LIMIT_PER_MINUTE, refill_per_sec=settings.RATE_LIMIT_PER_MINUTE / 60)
+auth_limiter = TokenBucket(capacity=max(10, settings.RATE_LIMIT_PER_MINUTE // 3),
+                           refill_per_sec=max(10, settings.RATE_LIMIT_PER_MINUTE // 3) / 60)
 
 
 @asynccontextmanager
@@ -33,8 +36,20 @@ app.add_middleware(CORSMiddleware, allow_origins=[o.strip() for o in settings.CO
 async def rate_limit_and_headers(request: Request, call_next):
     # Interaktive Nutzer-Routen: 60/min pro Token (Spec 10.1). Maschinen-Routen haben eigene Limits.
     auth = request.headers.get("authorization")
-    if auth and request.url.path.startswith("/api/"):
-        ok, retry = limiter.take(auth[-32:])
+    path = request.url.path
+    key = None
+    if path.startswith("/api/v1/auth/"):  # unauthenticated entry points: per client IP (brute force, sign-up spam)
+        key = "ip:" + (request.client.host if request.client else "?")
+        bucket = auth_limiter
+    elif auth and path.startswith("/api/"):
+        try:  # key by verified identity, never by attacker-chosen header bytes
+            u = decode_token(auth.split(" ", 1)[-1])
+            key = f"u:{u.tenant_id}:{u.sub}"
+        except Exception:
+            key = "ip:" + (request.client.host if request.client else "?")
+        bucket = limiter
+    if key:
+        ok, retry = bucket.take(key)
         if not ok:
             return JSONResponse({"detail": "Zu viele Anfragen"}, status_code=429,
                                 headers={"Retry-After": str(max(1, int(retry + 0.999)))})

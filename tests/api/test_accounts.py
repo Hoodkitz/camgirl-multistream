@@ -137,3 +137,11 @@ def test_removed_member_and_logout_all_invalidate_access_tokens(client):
     assert client.get("/api/v1/chat/inbox", headers=H(agent)).status_code == 401  # immediately, not after 15 min
     assert client.post("/api/v1/auth/logout-all", headers=H(owner)).status_code == 204
     assert client.get("/api/v1/tenants/me", headers=H(owner)).status_code == 401
+
+
+def test_fifth_attempt_with_correct_password_succeeds(client):
+    signup(client, "five@example.com")
+    for _ in range(4):
+        client.post("/api/v1/auth/login", json={"email": "five@example.com", "password": "wrong"})
+    assert client.post("/api/v1/auth/login", json={"email": "five@example.com",
+                                                   "password": "correct-horse-1"}).status_code == 200

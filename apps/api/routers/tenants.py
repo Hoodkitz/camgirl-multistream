@@ -48,6 +48,9 @@ async def delete_me(confirm: str = Header(..., alias="X-Confirm-Delete"),
         raise HTTPException(401, "Erneute Anmeldung erforderlich (max. 5 Minuten alt)")
     if confirm != t.name:
         raise HTTPException(422, "Bestaetigung stimmt nicht mit dem Mandantennamen ueberein")
+    if t.stripe_customer_id:  # never keep billing a deleted account
+        from apps.api.routers.billing import cancel_all_subscriptions
+        await cancel_all_subscriptions(t.stripe_customer_id)
     shredded = shred(t)  # zuerst: macht Backups sofort unlesbar
     if not shredded:
         raise HTTPException(500, "Schluesselvernichtung fehlgeschlagen, Loeschung abgebrochen")

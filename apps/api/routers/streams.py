@@ -56,6 +56,12 @@ async def revoke_stream_key(key_id: uuid.UUID, user: CurrentUser = Depends(requi
     if k is None:
         raise HTTPException(404, "Stream-Key nicht gefunden")
     k.revoked = True
+    # A revoked key must not keep streaming: end its open sessions (SRS is told to kick them via on_forward/next hook)
+    open_sessions = (await db.execute(select(StreamSession).where(
+        StreamSession.tenant_id == user.tenant_id, StreamSession.stream_key_id == k.id,
+        StreamSession.ended_at.is_(None)))).scalars().all()
+    for sess in open_sessions:
+        sess.ended_at, sess.end_reason = utcnow(), "key_revoked"
     await db.commit()
 
 
@@ -110,13 +116,16 @@ async def srs_hook(hook: SrsHook, request: Request, secret: str | None = Header(
     Antwortformat SRS: {"code": 0} = erlaubt, alles andere = abgelehnt."""
     _check_srs(request, secret)
     async with SessionLocal() as db:
-        key = (await db.execute(select(StreamKey).where(StreamKey.key_hash == hash_key(hook.stream),
-                                                        StreamKey.revoked.is_(False)))).scalar_one_or_none()
-        if key is None:
+        key = (await db.execute(select(StreamKey).where(StreamKey.key_hash == hash_key(hook.stream)))
+               ).scalar_one_or_none()
+        # on_unpublish must always close the session, even for a key revoked while live
+        if key is None or (key.revoked and hook.action != "on_unpublish"):
             raise HTTPException(403, "Unbekannter oder widerrufener Stream-Key")
         tenant = await db.get(Tenant, key.tenant_id)
 
         if hook.action == "on_publish":
+            # serialize concurrent publishes of one tenant, otherwise both see "0 active" and exceed the quota
+            await db.execute(select(Tenant.id).where(Tenant.id == tenant.id).with_for_update())
             active = (await db.execute(select(func.count()).select_from(StreamSession).where(
                 StreamSession.tenant_id == tenant.id, StreamSession.ended_at.is_(None)))).scalar_one()
             if active >= QUOTAS[Tier(tenant.tier)]["feeds"]:

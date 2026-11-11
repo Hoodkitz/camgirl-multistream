@@ -47,29 +47,63 @@ def _tier_from_prices(sub: dict) -> Tier | None:
     return None
 
 
+async def _customer_tier(customer: str | None) -> Tier | None:
+    """Best tier over ALL active subscriptions of the customer (None = could not ask Stripe)."""
+    if not customer or not settings.STRIPE_SECRET_KEY:
+        return None
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get("https://api.stripe.com/v1/subscriptions", auth=(settings.STRIPE_SECRET_KEY, ""),
+                            params={"customer": customer, "status": "all", "limit": 20})
+        r.raise_for_status()
+    except httpx.HTTPError:
+        return None
+    best = Tier.STANDARD
+    for sub in r.json().get("data", []):
+        if sub.get("status") in ("active", "trialing"):
+            t = _tier_from_prices(sub)
+            if t == Tier.AGENCY or (t == Tier.PRO and best == Tier.STANDARD):
+                best = t
+    return best
+
+
 async def process_inbox() -> int:
+    """Each event is handled and committed on its own: one malformed event can never block the others."""
+    import uuid
     n = 0
     async with SessionLocal() as db:
-        rows = (await db.execute(select(WebhookInbox).where(WebhookInbox.processed_at.is_(None)))).scalars().all()
-        for w in rows:
-            obj = w.payload.get("data", {}).get("object", {})
-            meta = obj.get("metadata", {}) or {}
-            if w.payload.get("type") in ("customer.subscription.created", "customer.subscription.updated",
-                                         "customer.subscription.deleted") and meta.get("tenant_id"):
-                import uuid
-                t = await db.get(Tenant, uuid.UUID(meta["tenant_id"]))
-                created = int(w.payload.get("created") or 0)
-                if t and created < (t.billing_event_at or 0):
-                    t = None  # older than the state already applied (Stripe does not guarantee ordering)
-                if t:
-                    t.billing_event_at = created
-                    active = obj.get("status") in ("active", "trialing") and w.payload["type"] != "customer.subscription.deleted"
-                    tier = _tier_from_prices(obj)  # never trust metadata: plan switches in the portal keep old metadata
-                    t.tier = tier.value if active and tier else Tier.STANDARD.value
-                    t.stripe_customer_id = obj.get("customer")
+        ids = (await db.execute(select(WebhookInbox.event_id).where(WebhookInbox.processed_at.is_(None))
+                                .order_by(WebhookInbox.received_at))).scalars().all()
+    for wid in ids:
+        async with SessionLocal() as db:
+            w = await db.get(WebhookInbox, wid)
+            if w is None or w.processed_at is not None:
+                continue
+            try:
+                obj = (w.payload.get("data") or {}).get("object") or {}
+                meta = obj.get("metadata") or {}
+                etype = w.payload.get("type")
+                if etype in ("customer.subscription.created", "customer.subscription.updated",
+                             "customer.subscription.deleted") and meta.get("tenant_id"):
+                    t = await db.get(Tenant, uuid.UUID(str(meta["tenant_id"])))
+                    created = int(w.payload.get("created") or 0)
+                    if t and created < (t.billing_event_at or 0):
+                        t = None  # older than the state already applied (Stripe does not guarantee ordering)
+                    if t:
+                        t.billing_event_at = created
+                        t.stripe_customer_id = obj.get("customer") or t.stripe_customer_id
+                        tier = await _customer_tier(t.stripe_customer_id)  # all subscriptions, not just this one
+                        if tier is None:  # Stripe not reachable/configured: fall back to this event
+                            active = obj.get("status") in ("active", "trialing") and etype != "customer.subscription.deleted"
+                            this = _tier_from_prices(obj)  # never trust metadata
+                            tier = this if active and this else Tier.STANDARD
+                        t.tier = tier.value
+            except (ValueError, TypeError, AttributeError) as e:  # malformed event: record, never retry forever
+                w.payload = {**w.payload, "_error": f"{type(e).__name__}"}
             w.processed_at = utcnow()
+            await db.commit()
             n += 1
-        await db.commit()
     return n
 
 
