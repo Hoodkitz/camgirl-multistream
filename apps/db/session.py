@@ -1,11 +1,15 @@
-from sqlalchemy import text
+from sqlalchemy import event, text
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from apps.core.config import settings
 
-engine = create_async_engine(settings.DATABASE_URL, future=True)
+# Tests drive the app from several event loops; pooled asyncpg connections must not outlive their loop.
+_pool = {"poolclass": NullPool} if settings.ENV == "test" else {}
+engine = create_async_engine(settings.DATABASE_URL, future=True, **_pool)
 SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-system_engine = create_async_engine(settings.SYSTEM_DATABASE_URL, future=True) if settings.SYSTEM_DATABASE_URL else engine
+system_engine = create_async_engine(settings.SYSTEM_DATABASE_URL, future=True, **_pool) if settings.SYSTEM_DATABASE_URL else engine
 SystemSessionLocal = async_sessionmaker(system_engine, class_=AsyncSession, expire_on_commit=False)
 
 
@@ -15,6 +19,22 @@ async def init_models() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
+_SET = text("SELECT set_config('app.tenant_id', :t, true)")
+
+
+@event.listens_for(Session, "after_begin")
+def _apply_tenant_context(session: Session, transaction, connection) -> None:
+    """Re-apply the RLS tenant in EVERY transaction of the session (also after commit()).
+
+    set_config(..., true) is transaction-local (no leak through the pool); without this hook every query after the
+    first commit() would run without tenant context (empty reads, RLS violations on writes).
+    """
+    tid = session.info.get("tenant_id")
+    if tid and connection.dialect.name == "postgresql":
+        connection.execute(_SET, {"t": tid})
+
+
 async def set_tenant_context(session: AsyncSession, tenant_id: str) -> None:
-    if session.bind.dialect.name == "postgresql":
-        await session.execute(text("SELECT set_config('app.tenant_id', :t, true)"), {"t": tenant_id})
+    session.info["tenant_id"] = str(tenant_id)
+    if session.bind.dialect.name == "postgresql" and session.in_transaction():
+        await session.execute(_SET, {"t": str(tenant_id)})

@@ -23,6 +23,7 @@ async def create_tenant(req: TenantCreate, user: CurrentUser = Depends(require(P
     t = m.Tenant(id=user.tenant_id, name=req.name, kek_ref="")
     new_tenant_kek(t)
     db.add(t)
+    await db.flush()  # the tenant row must exist before rows referencing it (enforced FK on Postgres)
     db.add(m.AutomationSettings(tenant_id=t.id))
     await db.commit()
     return t

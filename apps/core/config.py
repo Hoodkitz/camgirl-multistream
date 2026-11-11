@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite+aiosqlite:///./camgirl-dev.db"
     # Systemrolle (BYPASSRLS) fuer mandantenuebergreifende Callbacks: SRS-Key-Lookup, Outbox-Worker, Webhooks
     SYSTEM_DATABASE_URL: str | None = None
-    AUTO_CREATE_TABLES: bool = True
+    AUTO_CREATE_TABLES: bool | None = None  # None: only in dev/test; production uses `alembic upgrade head`
 
     JWT_SECRET: str = _DEV_SECRET
     JWT_ALGORITHM: str = "HS256"

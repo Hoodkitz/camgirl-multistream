@@ -4,7 +4,12 @@ import tempfile
 import uuid
 
 _tmp = tempfile.mkdtemp()
-os.environ.update(ENV="test", DATABASE_URL=f"sqlite+aiosqlite:///{_tmp}/test.db",
+# Optional: whole suite on Postgres. App = RLS-restricted role, system/owner = BYPASSRLS (truncate + system tasks).
+PG_APP = os.environ.get("PG_TEST_APP_URL")
+PG_OWNER = os.environ.get("PG_TEST_OWNER_URL")
+if PG_APP:
+    os.environ.update(SYSTEM_DATABASE_URL=PG_OWNER, AUTO_CREATE_TABLES="false")
+os.environ.update(ENV="test", DATABASE_URL=PG_APP or f"sqlite+aiosqlite:///{_tmp}/test.db",
                   JWT_SECRET="test-secret-0123456789abcdef0123456789", RATE_LIMIT_PER_MINUTE="1000",
                   KEY_STORE_DIR=f"{_tmp}/keys")
 
@@ -19,6 +24,14 @@ from apps.services import connectors  # noqa: E402
 
 
 async def _reset():
+    if PG_APP:
+        from sqlalchemy import text
+
+        from apps.db.session import system_engine
+        async with system_engine.begin() as conn:
+            names = ", ".join(t.name for t in Base.metadata.sorted_tables)
+            await conn.execute(text(f"TRUNCATE {names} CASCADE"))
+        return
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)

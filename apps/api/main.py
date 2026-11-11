@@ -16,7 +16,7 @@ limiter = TokenBucket(capacity=settings.RATE_LIMIT_PER_MINUTE, refill_per_sec=se
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    if settings.AUTO_CREATE_TABLES:
+    if settings.AUTO_CREATE_TABLES or (settings.AUTO_CREATE_TABLES is None and settings.dev_endpoints_enabled):
         await init_models()
     yield
 
