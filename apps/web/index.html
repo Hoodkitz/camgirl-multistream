@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CamGirl Multi-Stream</title>
+    <link rel="stylesheet" href="/app/app.css">
+</head>
+<body class="theme-dark">
+    <div id="app">
+        <!-- Auth Section -->
+        <section id="auth-section" class="view active">
+            <div class="auth-container">
+                <h1 data-i18n="login_title">Login / Register</h1>
+                <div class="tabs">
+                    <button class="tab-btn active" onclick="app.showAuthTab('login')" data-i18n="login_tab">Login</button>
+                    <button class="tab-btn" onclick="app.showAuthTab('register')" data-i18n="register_tab">Register</button>
+                </div>
+                <form id="login-form" class="auth-form active" onsubmit="app.login(event)">
+                    <div class="form-group">
+                        <label data-i18n="sub_id">Sub (User ID)</label>
+                        <input type="text" id="login-sub" required>
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="tenant_id">Tenant ID (UUID)</label>
+                        <input type="text" id="login-tenant" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary" data-i18n="login_btn">Login (Dev Token)</button>
+                </form>
+                <form id="register-form" class="auth-form" onsubmit="app.register(event)">
+                    <div class="form-group">
+                        <label data-i18n="tenant_name">Tenant Name</label>
+                        <input type="text" id="reg-name" required>
+                    </div>
+                    <p class="help-text" data-i18n="register_help">Requires Dev Token first to set owner roles.</p>
+                    <button type="submit" class="btn btn-primary" data-i18n="register_btn">Register Tenant</button>
+                </form>
+            </div>
+        </section>
+
+        <!-- Main App Section -->
+        <section id="main-section" class="view">
+            <header class="app-header">
+                <h2>CamGirl Multi-Stream</h2>
+                <div class="header-controls">
+                    <span id="user-info"></span>
+                    <button onclick="app.toggleLang()" class="btn btn-sm" id="lang-btn">DE</button>
+                    <button onclick="app.logout()" class="btn btn-sm btn-outline" data-i18n="logout">Logout</button>
+                </div>
+            </header>
+
+            <nav class="app-nav">
+                <button class="nav-btn active" onclick="app.showView('dashboard')" data-i18n="nav_dashboard">Dashboard</button>
+                <button class="nav-btn" onclick="app.showView('chat')" data-i18n="nav_chat">Chat Inbox</button>
+                <button class="nav-btn" onclick="app.showView('automation')" data-i18n="nav_automation">Automation</button>
+                <button class="nav-btn" onclick="app.showView('stats')" data-i18n="nav_stats">Stats</button>
+                <button class="nav-btn" onclick="app.showView('settings')" data-i18n="nav_settings">Settings</button>
+            </nav>
+
+            <main class="app-content">
+                <!-- Dashboard -->
+                <div id="view-dashboard" class="content-view active">
+                    <h3 data-i18n="credentials_title">Platform Credentials</h3>
+                    <form onsubmit="app.addCredential(event)" class="inline-form">
+                        <select id="cred-platform" required>
+                            <option value="chaturbate">Chaturbate</option>
+                            <option value="bongacams">BongaCams</option>
+                            <option value="stripchat">Stripchat</option>
+                            <option value="camsoda">CamSoda</option>
+                        </select>
+                        <input type="text" id="cred-username" placeholder="Username" required>
+                        <input type="password" id="cred-streamkey" placeholder="Stream Key" required>
+                        <input type="text" id="cred-ingest" placeholder="Ingest URL (optional)">
+                        <button type="submit" class="btn btn-primary" data-i18n="add">Add</button>
+                    </form>
+                    <ul id="credentials-list" class="item-list"></ul>
+
+                    <h3 data-i18n="stream_keys_title">Stream Keys</h3>
+                    <form onsubmit="app.createStreamKey(event)" class="inline-form">
+                        <input type="text" id="sk-label" placeholder="Label" required>
+                        <button type="submit" class="btn btn-primary" data-i18n="create">Create</button>
+                    </form>
+                    <div id="new-stream-key-result" class="alert hidden"></div>
+                    <ul id="stream-keys-list" class="item-list"></ul>
+
+                    <h3 data-i18n="live_sessions_title">Live Sessions</h3>
+                    <ul id="sessions-list" class="item-list"></ul>
+                </div>
+
+                <!-- Chat -->
+                <div id="view-chat" class="content-view chat-layout">
+                    <div class="chat-main">
+                        <div id="chat-messages" class="chat-messages"></div>
+                        <form onsubmit="app.sendChatMessage(event)" class="chat-input-form">
+                            <select id="chat-platform-select" required></select>
+                            <input type="text" id="chat-input-text" placeholder="Message..." required autocomplete="off">
+                            <button type="submit" class="btn btn-primary" data-i18n="send">Send</button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Automation -->
+                <div id="view-automation" class="content-view">
+                    <h3 data-i18n="automation_title">Automation Settings</h3>
+                    <form id="automation-form" onsubmit="app.saveAutomation(event)">
+                        <div class="form-group">
+                            <label><input type="checkbox" id="auto-greet-enabled"> <span data-i18n="enable_greet">Enable Greeting</span></label>
+                        </div>
+                        <div class="form-group">
+                            <label data-i18n="greet_template">Template ({username}, {platform})</label>
+                            <input type="text" id="auto-greet-template">
+                        </div>
+                        <div class="form-group">
+                            <label data-i18n="greet_cooldown">Cooldown (hours)</label>
+                            <input type="number" id="auto-greet-cooldown" min="1" max="720">
+                        </div>
+                        <div class="form-group">
+                            <label data-i18n="tip_goal">Tip Goal (Tokens)</label>
+                            <input type="number" id="auto-tip-goal">
+                        </div>
+                        <div class="form-group">
+                            <label data-i18n="obs_webhook">OBS Webhook URL (HTTPS)</label>
+                            <input type="url" id="auto-obs-webhook">
+                        </div>
+                        <button type="submit" class="btn btn-primary" data-i18n="save">Save</button>
+                    </form>
+                </div>
+
+                <!-- Stats -->
+                <div id="view-stats" class="content-view">
+                    <h3 data-i18n="stats_title">Statistics</h3>
+                    <div id="stats-content"></div>
+                </div>
+
+                <!-- Settings -->
+                <div id="view-settings" class="content-view">
+                    <h3 data-i18n="subscription">Subscription</h3>
+                    <p id="subscription-status"></p>
+                    <button class="btn btn-primary" onclick="app.checkoutStripe()" data-i18n="upgrade_pro">Upgrade to Pro</button>
+
+                    <h3 class="danger-text" data-i18n="danger_zone">Danger Zone</h3>
+                    <div class="danger-box">
+                        <h4 data-i18n="delete_account">Delete Account</h4>
+                        <p data-i18n="delete_warning">This action is irreversible. All data will be physically deleted.</p>
+                        <form onsubmit="app.deleteAccount(event)">
+                            <div class="form-group">
+                                <label data-i18n="confirm_name">Type Tenant Name to confirm:</label>
+                                <input type="text" id="delete-confirm-name" required>
+                            </div>
+                            <button type="submit" class="btn btn-danger" data-i18n="delete_btn">Permanently Delete</button>
+                        </form>
+                    </div>
+                </div>
+            </main>
+        </section>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="toast hidden"></div>
+
+    <script type="module" src="/app/app.js"></script>
+</body>
+</html>

@@ -1,9 +1,11 @@
 """Multi-Stream & Chat-Aggregation – API."""
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from apps.api.routers import automation, chat, credentials, stats, streams, system, tenants
 from apps.core.config import settings
@@ -53,3 +55,10 @@ if settings.dev_endpoints_enabled:
 @app.get("/healthz")
 async def health():
     return {"status": "ok", "version": VERSION}
+
+
+app.mount("/app", StaticFiles(directory=Path(__file__).resolve().parents[1] / "web", html=True), name="web")
+
+@app.get("/")
+async def root():
+    return RedirectResponse(url="/app")
