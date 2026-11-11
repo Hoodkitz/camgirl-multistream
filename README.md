@@ -37,6 +37,7 @@ docker build -t camgirl-multistream .
 Produktion: `alembic upgrade head` als DB-Owner (legt Schema, RLS und die Rolle `application_role` an),
 dann `ALTER ROLE application_role LOGIN PASSWORD '…'`; die App verbindet mit `DATABASE_URL` als `application_role`,
 Systemaufgaben (Webhooks, Outbox) mit `SYSTEM_DATABASE_URL` als Rolle mit `BYPASSRLS`.
+Hinter einem Reverse Proxy uvicorn mit `--proxy-headers --forwarded-allow-ips=<Proxy-IP>` starten, damit IP-Limits die echte Client-IP sehen.
 Pflicht-Variablen: `JWT_SECRET`, `SRS_CALLBACK_SECRET`, `CONNECTOR_SECRET`, `STRIPE_WEBHOOK_SECRET`, `OBS_WEBHOOK_SECRET`,
 `LOCAL_KMS_MASTER_KEY`; für Abos `STRIPE_SECRET_KEY`, `STRIPE_PRICE_PRO`, `STRIPE_PRICE_AGENCY`, `PUBLIC_BASE_URL`.
 

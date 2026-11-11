@@ -56,12 +56,13 @@ async def revoke_stream_key(key_id: uuid.UUID, user: CurrentUser = Depends(requi
     if k is None:
         raise HTTPException(404, "Stream-Key nicht gefunden")
     k.revoked = True
-    # A revoked key must not keep streaming: end its open sessions (SRS is told to kick them via on_forward/next hook)
+    # A revoked key must not keep streaming: its open sessions are marked for kicking (returned by /overdue to SRS)
+    # and keep counting toward the quota until SRS really disconnects them (on_unpublish).
     open_sessions = (await db.execute(select(StreamSession).where(
         StreamSession.tenant_id == user.tenant_id, StreamSession.stream_key_id == k.id,
         StreamSession.ended_at.is_(None)))).scalars().all()
     for sess in open_sessions:
-        sess.ended_at, sess.end_reason = utcnow(), "key_revoked"
+        sess.end_reason = "key_revoked"
     await db.commit()
 
 
@@ -145,7 +146,8 @@ async def srs_hook(hook: SrsHook, request: Request, secret: str | None = Header(
                 StreamSession.tenant_id == tenant.id, StreamSession.srs_client_id == hook.client_id,
                 StreamSession.ended_at.is_(None)))).scalar_one_or_none()
             if sess:
-                sess.ended_at, sess.end_reason = utcnow(), "unpublish"
+                sess.ended_at = utcnow()
+                sess.end_reason = "key_revoked" if sess.end_reason == "key_revoked" else "unpublish"
                 await db.commit()
             return {"code": 0}
     raise HTTPException(400, f"Unbekannte Aktion {hook.action}")
@@ -161,5 +163,8 @@ async def overdue_sessions(request: Request, secret: str | None = Header(None, a
             StreamSession.ended_at.is_(None), StreamSession.started_at < limit))).scalars().all()
         for s in rows:
             s.ended_at, s.end_reason = utcnow(), "wall_time_cap"
+        revoked = (await db.execute(select(StreamSession).where(
+            StreamSession.ended_at.is_(None), StreamSession.end_reason == "key_revoked"))).scalars().all()
         await db.commit()
-        return {"kick_client_ids": [s.srs_client_id for s in rows]}
+        # revoked sessions end on SRS's on_unpublish after the kick, not before
+        return {"kick_client_ids": [s.srs_client_id for s in rows] + [s.srs_client_id for s in revoked]}

@@ -303,10 +303,13 @@ def test_revoking_live_key_frees_feed_quota(client, tenant):
     hook = {"action": "on_publish", "client_id": "live1", "stream": sk["stream_key"]}
     assert client.post("/api/v1/streams/verify", headers=SRS, json=hook).json() == {"code": 0}
     client.delete(f"/api/v1/streams/keys/{sk['id']}", headers=H("owner"))
-    s = client.get("/api/v1/streams/sessions", headers=H("owner")).json()
-    assert s[0]["end_reason"] == "key_revoked"
-    # encoder stops later: unpublish of the revoked key is still accepted
+    # still live until SRS kicks it: counts toward the quota and is returned for kicking
+    kick = client.post("/api/v1/streams/overdue", headers=SRS).json()["kick_client_ids"]
+    assert "live1" in kick
+    # SRS disconnects -> unpublish of the revoked key is accepted and ends the session
     assert client.post("/api/v1/streams/verify", headers=SRS, json={**hook, "action": "on_unpublish"}).json()["code"] == 0
+    s = client.get("/api/v1/streams/sessions", headers=H("owner")).json()
+    assert s[0]["end_reason"] == "key_revoked" and s[0]["ended_at"]
     sk2 = client.post("/api/v1/streams/keys", headers=H("creator"), json={"label": "Neu"}).json()
     assert client.post("/api/v1/streams/verify", headers=SRS,
                        json={**hook, "client_id": "live2", "stream": sk2["stream_key"]}).json() == {"code": 0}

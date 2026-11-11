@@ -91,6 +91,13 @@ async def register(req: SignUp):
         return _token(u)
 
 
+def _equal_work(password: str) -> None:
+    try:
+        _ph.verify(_DUMMY, password)
+    except VerificationError:
+        pass
+
+
 async def _check_password(db, u: m.User | None, password: str) -> bool:
     if u is None:
         try:
@@ -107,11 +114,13 @@ async def _check_password(db, u: m.User | None, password: str) -> bool:
                                   locked_until=None).returning(m.User.failed_logins))).scalar()
     await db.commit()
     if n is None:
-        return False  # locked: same answer as a wrong password
+        _equal_work(password)
+        return False  # locked: same answer (and same Argon2 work) as a wrong password
     if n > MAX_FAILED:  # parallel guesses raced past the limit: lock (expires, then the counter restarts)
         await db.execute(update(m.User).where(m.User.id == u.id)
                          .values(locked_until=now + timedelta(minutes=LOCK_MINUTES)))
         await db.commit()
+        _equal_work(password)
         return False
     try:
         _ph.verify(u.password_hash, password)
