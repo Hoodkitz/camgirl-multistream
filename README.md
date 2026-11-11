@@ -27,7 +27,7 @@ Ein Feed per OBS → gleichzeitig an alle Cam-Portale. Alle Portal-Chats gebünd
 ```bash
 uv venv -p 3.12 .venv && uv pip install -p .venv/bin/python -r requirements.txt pytest
 ENV=dev .venv/bin/uvicorn apps.api.main:app --reload   # /docs, /dev/token
-.venv/bin/python -m pytest                              # 25 Tests
+.venv/bin/python -m pytest                              # 24 Tests
 docker build -t camgirl-multistream .
 ```
 
