@@ -102,18 +102,21 @@ async def ws_chat(ws: WebSocket, ticket: str):
     await ws.accept()
     q = bus.subscribe(tenant_id)
     try:
+        last_check = time.monotonic()
         while True:
+            # removed members / "logout everywhere" must lose the live feed too – checked on a wall clock,
+            # independent of how busy the chat is
+            if user.account_version is not None and time.monotonic() - last_check >= 30:
+                last_check = time.monotonic()
+                try:
+                    await _check_account(user)
+                except HTTPException:
+                    await ws.close(code=4401)
+                    return
             try:
                 event = await asyncio.wait_for(q.get(), timeout=30)
                 await ws.send_json(event)
             except asyncio.TimeoutError:
-                # removed members / "logout everywhere" must lose the live feed too, not only REST access
-                if user.account_version is not None:
-                    try:
-                        await _check_account(user)
-                    except HTTPException:
-                        await ws.close(code=4401)
-                        return
                 await ws.send_json({"type": "ping"})  # Heartbeat (Spec 5.3)
     except (WebSocketDisconnect, RuntimeError):
         pass
