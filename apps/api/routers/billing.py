@@ -13,6 +13,7 @@ from apps.security.auth import CurrentUser, get_db, require
 
 router = APIRouter(prefix="/api/v1/billing", tags=["billing"])
 STRIPE = "https://api.stripe.com/v1"
+_recent_checkouts: dict[str, tuple[float, str]] = {}
 
 
 class CheckoutIn(BaseModel):
@@ -48,6 +49,10 @@ async def checkout(req: CheckoutIn, user: CurrentUser = Depends(require(P.TENANT
         raise HTTPException(404, "Mandant nicht gefunden")
     if t.stripe_customer_id and t.tier != Tier.STANDARD.value:
         raise HTTPException(409, "Es besteht bereits ein Abo – Tarifwechsel bitte über das Kundenportal")
+    import time as _time
+    last = _recent_checkouts.get(str(t.id))
+    if last and _time.monotonic() - last[0] < 600:
+        return {"url": last[1]}  # double click / second tab: same checkout session, never two subscriptions
     base = settings.PUBLIC_BASE_URL.rstrip("/")
     form = [("mode", "subscription"), ("line_items[0][price]", price), ("line_items[0][quantity]", "1"),
             ("success_url", f"{base}/app/?billing=success"), ("cancel_url", f"{base}/app/?billing=cancel"),
@@ -57,6 +62,7 @@ async def checkout(req: CheckoutIn, user: CurrentUser = Depends(require(P.TENANT
     if t.stripe_customer_id:
         form.append(("customer", t.stripe_customer_id))
     session = await _stripe("checkout/sessions", form)
+    _recent_checkouts[str(t.id)] = (_time.monotonic(), session["url"])
     return {"url": session["url"]}
 
 

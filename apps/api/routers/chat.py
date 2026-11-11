@@ -14,7 +14,7 @@ from apps.core.config import settings
 from apps.core.permissions import Permission as P
 from apps.db.models import ChatEvent, Outbox, PlatformAccount, Tenant
 from apps.db.session import SessionLocal, set_tenant_context
-from apps.security.auth import CurrentUser, get_db, require, require_secret
+from apps.security.auth import CurrentUser, _check_account, get_db, require, require_secret
 from apps.services import events as ev_svc, outbox
 from apps.services.bus import bus
 
@@ -84,11 +84,11 @@ async def reply(req: ReplyIn, background: BackgroundTasks, user: CurrentUser = D
 @router.post("/api/v1/ws/ticket")
 async def ws_ticket(user: CurrentUser = Depends(require(P.CHAT_READ))):
     now = time.time()
-    for k, (_, exp) in list(_tickets.items()):
+    for k, (_, exp, _u) in list(_tickets.items()):
         if exp < now:
             _tickets.pop(k, None)
     t = secrets.token_urlsafe(24)
-    _tickets[t] = (user.tenant_id, now + TICKET_TTL)
+    _tickets[t] = (user.tenant_id, now + TICKET_TTL, user)
     return {"ticket": t, "expires_in": TICKET_TTL}
 
 
@@ -98,7 +98,7 @@ async def ws_chat(ws: WebSocket, ticket: str):
     if entry is None or entry[1] < time.time():
         await ws.close(code=4401)
         return
-    tenant_id = str(entry[0])
+    tenant_id, user = str(entry[0]), entry[2]
     await ws.accept()
     q = bus.subscribe(tenant_id)
     try:
@@ -107,6 +107,13 @@ async def ws_chat(ws: WebSocket, ticket: str):
                 event = await asyncio.wait_for(q.get(), timeout=30)
                 await ws.send_json(event)
             except asyncio.TimeoutError:
+                # removed members / "logout everywhere" must lose the live feed too, not only REST access
+                if user.account_version is not None:
+                    try:
+                        await _check_account(user)
+                    except HTTPException:
+                        await ws.close(code=4401)
+                        return
                 await ws.send_json({"type": "ping"})  # Heartbeat (Spec 5.3)
     except (WebSocketDisconnect, RuntimeError):
         pass
