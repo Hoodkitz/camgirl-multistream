@@ -126,7 +126,7 @@ def test_spendenziel_loest_obs_outbox_aus(client, tenant):
     tid, H = tenant
     add_cred(client, H)
     client.put("/api/v1/automation", headers=H("owner"), json={
-        "tip_goal_tokens": 1000, "tip_goal_label": "Tanz", "obs_webhook_url": "http://127.0.0.1:9/obs"})
+        "tip_goal_tokens": 1000, "tip_goal_label": "Tanz", "obs_webhook_url": "https://obs.example.invalid/hook"})
     sk = client.post("/api/v1/streams/keys", headers=H("owner"), json={}).json()
     client.post("/api/v1/streams/verify", headers=SRS, json={"action": "on_publish", "client_id": "c1", "stream": sk["stream_key"]})
     assert client.post("/api/v1/events", headers=CONN, json=event(tid, "t1", "tip", tokens_spent=600, fiat_equivalent_usd=30)).json()["actions"] == []
@@ -197,6 +197,8 @@ def test_dsgvo_loeschung_mit_reauth_und_crypto_shredding(client, tenant):
     assert client.delete("/api/v1/tenants/me", headers={**H("creator"), "X-Confirm-Delete": "Luna Studio"}).status_code == 403
     r = client.delete("/api/v1/tenants/me", headers={**H("owner"), "X-Confirm-Delete": "Luna Studio"})
     assert r.status_code == 200 and r.json()["crypto_shredded"]
+    import os
+    assert not [f for f in os.listdir(os.environ["KEY_STORE_DIR"]) if tid in f]
     assert client.get("/api/v1/tenants/me", headers=H("owner")).status_code == 404
     assert client.get("/api/v1/credentials", headers=H("owner")).json() == []
 
@@ -213,3 +215,29 @@ def test_rate_limit_429():
             assert codes[:2] == [404, 404] and codes[2] == 429
     finally:
         main.limiter = old
+
+
+def test_ssrf_schutz(client, tenant):
+    tid, H = tenant
+    for url in ("http://obs.example.com/x", "https://127.0.0.1/x", "https://10.0.0.5/x", "https://localhost/x",
+                "https://[::1]/x", "https://169.254.169.254/latest"):
+        assert client.put("/api/v1/automation", headers=H("owner"), json={"obs_webhook_url": url}).status_code == 422, url
+    for url in ("rtmp://10.0.0.1/live", "rtmp://evil.example.com/live", "http://s-sd.stripst.com/ext",
+                "rtmp://s-sd.stripst.com:22/ext"):
+        r = client.post("/api/v1/credentials", headers=H("owner"), json={
+            "platform": "stripchat", "account_username": "x", "stream_key": "abcd", "ingest_url": url})
+        assert r.status_code == 422, url
+    ok = client.post("/api/v1/credentials", headers=H("owner"), json={
+        "platform": "stripchat", "account_username": "x", "stream_key": "abcd", "ingest_url": "rtmp://s-sd.stripst.com/ext"})
+    assert ok.status_code == 201
+
+
+def test_netguard_beim_senden():
+    import pytest
+
+    from apps.domain.netguard import assert_public_host
+    with pytest.raises(ValueError):
+        assert_public_host("127.0.0.1")
+    with pytest.raises(ValueError):
+        assert_public_host("localhost")
+    assert assert_public_host("1.1.1.1") == ["1.1.1.1"]

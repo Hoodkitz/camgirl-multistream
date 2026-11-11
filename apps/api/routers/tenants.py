@@ -47,10 +47,12 @@ async def delete_me(confirm: str = Header(..., alias="X-Confirm-Delete"),
         raise HTTPException(401, "Erneute Anmeldung erforderlich (max. 5 Minuten alt)")
     if confirm != t.name:
         raise HTTPException(422, "Bestaetigung stimmt nicht mit dem Mandantennamen ueberein")
-    shred(t)  # zuerst: macht Backups sofort unlesbar
+    shredded = shred(t)  # zuerst: macht Backups sofort unlesbar
+    if not shredded:
+        raise HTTPException(500, "Schluesselvernichtung fehlgeschlagen, Loeschung abgebrochen")
     for model in (m.ChatEvent, m.GreetLog, m.Outbox, m.StreamSession, m.StreamKey, m.PlatformAccount,
                   m.AutomationSettings):
         await db.execute(delete(model).where(model.tenant_id == t.id))
     await db.delete(t)
     await db.commit()
-    return {"status": "geloescht", "crypto_shredded": True}
+    return {"status": "geloescht", "crypto_shredded": shredded}

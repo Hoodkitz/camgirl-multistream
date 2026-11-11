@@ -24,7 +24,6 @@ class Tenant(Base):
     name: Mapped[str] = mapped_column(String(255))
     tier: Mapped[str] = mapped_column(String(20), default="standard")
     kek_ref: Mapped[str] = mapped_column(String(255))
-    kek_blob: Mapped[bytes | None] = mapped_column(LargeBinary)  # nur LocalKMS; Cloud-KMS haelt den KEK selbst
     stripe_customer_id: Mapped[str | None] = mapped_column(String(64), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

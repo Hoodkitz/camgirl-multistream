@@ -47,3 +47,12 @@ QUOTAS = {
     Tier.PRO: {"feeds": 1, "targets": 10},
     Tier.AGENCY: {"feeds": 3, "targets": 10},
 }
+
+
+def allowed_ingest_hosts() -> set[str]:
+    from urllib.parse import urlsplit
+
+    from apps.core.config import settings
+    hosts = {urlsplit(u).hostname for u in DEFAULT_INGEST.values()}
+    hosts |= {h.strip().lower() for h in settings.EXTRA_INGEST_HOSTS.split(",") if h.strip()}
+    return hosts

@@ -5,7 +5,8 @@ import uuid
 
 _tmp = tempfile.mkdtemp()
 os.environ.update(ENV="test", DATABASE_URL=f"sqlite+aiosqlite:///{_tmp}/test.db",
-                  JWT_SECRET="test-secret-0123456789abcdef0123456789", RATE_LIMIT_PER_MINUTE="1000")
+                  JWT_SECRET="test-secret-0123456789abcdef0123456789", RATE_LIMIT_PER_MINUTE="1000",
+                  KEY_STORE_DIR=f"{_tmp}/keys")
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

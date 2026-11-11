@@ -47,8 +47,15 @@ async def _chat_reply(db, e: Outbox) -> None:
 
 
 async def _obs_webhook(e: Outbox) -> None:
+    from urllib.parse import urlsplit
+
+    from apps.domain.netguard import assert_public_host
+    u = urlsplit(e.payload["url"])
+    if u.scheme != "https":
+        raise RuntimeError("OBS-Webhook muss https sein")
+    assert_public_host(u.hostname or "", u.port or 443)  # beim Senden erneut pruefen (DNS-Rebinding)
     body = json.dumps({k: v for k, v in e.payload.items() if k != "url"}).encode()
-    async with httpx.AsyncClient(timeout=5) as client:
+    async with httpx.AsyncClient(timeout=5, follow_redirects=False) as client:
         r = await client.post(e.payload["url"], content=body, headers={
             "Content-Type": "application/json", "X-Signature": sign(settings.OBS_WEBHOOK_SECRET, body)})
         r.raise_for_status()

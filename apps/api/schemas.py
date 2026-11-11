@@ -26,7 +26,23 @@ class CredentialCreate(BaseModel):
     account_username: str = Field(min_length=1, max_length=255)
     stream_key: str = Field(min_length=4, max_length=512, description="Portal-Stream-Key (wird verschluesselt)")
     api_token: str | None = Field(default=None, max_length=4096, description="optional: Chat-API-Token/Passwort")
-    ingest_url: str | None = Field(default=None, pattern=r"^rtmps?://[^\s]+$", max_length=500)
+    ingest_url: str | None = Field(default=None, max_length=500,
+                                   description="Nur bekannte Portal-Ingest-Hosts (ALLOWED_INGEST_HOSTS)")
+
+    @field_validator("ingest_url")
+    @classmethod
+    def _known_ingest_host(cls, v):
+        if v is None:
+            return v
+        from urllib.parse import urlsplit
+
+        from apps.core.enums import allowed_ingest_hosts
+        u = urlsplit(v)
+        if u.scheme not in ("rtmp", "rtmps") or (u.hostname or "").lower() not in allowed_ingest_hosts():
+            raise ValueError("Ingest-URL muss rtmp(s) zu einem bekannten Portal-Host sein")
+        if u.port not in (None, 1935, 443):
+            raise ValueError("Nur Port 1935 oder 443 erlaubt")
+        return v
 
 
 class CredentialOut(ORM):
@@ -124,9 +140,14 @@ class AutomationIn(BaseModel):
 
     @field_validator("obs_webhook_url")
     @classmethod
-    def _https_or_local(cls, v):
-        if v and v.scheme != "https" and v.host not in ("localhost", "127.0.0.1"):
+    def _https_public(cls, v):
+        from apps.domain.netguard import is_ip_literal_private
+        if v is None:
+            return v
+        if v.scheme != "https":
             raise ValueError("OBS-Webhook muss https sein")
+        if is_ip_literal_private(v.host or ""):
+            raise ValueError("OBS-Webhook darf nicht auf interne Adressen zeigen")
         return v
 
 

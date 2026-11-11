@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     LOCAL_KMS_MASTER_KEY: str = "ZGV2LW1hc3Rlci1rZXktZG8tbm90LXVzZS1pbi1wciE="
 
     CORS_ORIGINS: str = "http://localhost:3000"
+    EXTRA_INGEST_HOSTS: str = ""  # zusaetzliche Portal-Ingest-Hosts (Komma-getrennt)
+    # Tenant-KEKs liegen AUSSERHALB der Datenbank (nicht im DB-Backup), damit Crypto-Shredding wirkt.
+    # Produktion: Cloud-KMS/HSM; dieses Verzeichnis nur fuer Einzelserver-Betrieb.
+    KEY_STORE_DIR: str = "./var/keys"
     RATE_LIMIT_PER_MINUTE: int = 60
     CHAT_RETENTION_DAYS: int = 30
     STREAM_WALL_TIME_HOURS: int = 24

@@ -18,7 +18,8 @@ Ein Feed per OBS → gleichzeitig an alle Cam-Portale. Alle Portal-Chats gebünd
 | **Spendenziel** | Token-Ziel pro Session → signierter OBS-Webhook (HMAC) über die Outbox |
 | **Statistiken** | `GET /api/v1/stats/overview` – Umsatz, Tokens, Tips, Chatter, Top-Spender pro Portal, Umsatz/Stunde |
 | **Abo** | `POST /api/v1/webhooks/stripe` – HMAC-Prüfung, Inbox mit UNIQUE `event_id`, setzt Tarif |
-| **DSGVO** | `DELETE /api/v1/tenants/me` – Re-Auth (≤ 5 min) + Namensbestätigung, Crypto-Shredding des KEK, physische Löschkaskade. `POST /api/v1/maintenance/retention` löscht Chats nach 30 Tagen. |
+| **DSGVO** | `DELETE /api/v1/tenants/me` – Re-Auth (≤ 5 min) + Namensbestätigung, Crypto-Shredding des KEK (KEKs liegen außerhalb der DB in `KEY_STORE_DIR`, das nicht mit der DB gesichert werden darf; Produktion: Cloud-KMS/HSM), physische Löschkaskade. `POST /api/v1/maintenance/retention` löscht Chats nach 30 Tagen. |
+| **SSRF-Schutz** | OBS-Webhooks nur https auf öffentliche Hosts (beim Speichern und beim Senden geprüft, keine Redirects); Ingest-URLs nur zu bekannten Portal-Hosts (`EXTRA_INGEST_HOSTS`), Port 1935/443 |
 | **Sicherheit** | JWT (OIDC-Tokens, 15 min), RBAC (owner/creator/agent/audit), Mandantenfilter in jeder Abfrage + Postgres-RLS (`db_migrations/001_rls.sql`), Rate-Limit 60/min, ENV default `prod` (bricht ohne echte Secrets ab) |
 
 ## Start
@@ -26,7 +27,7 @@ Ein Feed per OBS → gleichzeitig an alle Cam-Portale. Alle Portal-Chats gebünd
 ```bash
 uv venv -p 3.12 .venv && uv pip install -p .venv/bin/python -r requirements.txt pytest
 ENV=dev .venv/bin/uvicorn apps.api.main:app --reload   # /docs, /dev/token
-.venv/bin/python -m pytest                              # 22 Tests
+.venv/bin/python -m pytest                              # 25 Tests
 docker build -t camgirl-multistream .
 ```
 
