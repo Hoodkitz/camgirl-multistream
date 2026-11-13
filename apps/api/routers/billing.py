@@ -25,6 +25,13 @@ def _prices() -> dict[Tier, str]:
 
 
 async def _stripe(path: str, form: list[tuple[str, str]]) -> dict:
+    # Development / test helper: when running in dev/test and a test key is configured,
+    # avoid calling out to Stripe and return a fake checkout/session URL. This keeps
+    # e2e tests hermetic and prevents accidental use of real keys or incurring costs.
+    if settings.ENV in ("dev", "test") and settings.STRIPE_SECRET_KEY and settings.STRIPE_SECRET_KEY.startswith("sk_test"):
+        # emulate the shape of Stripe's session response used by the frontend
+        return {"url": "https://checkout.stripe.com/c/pay/cs_test_fake"}
+
     if not settings.STRIPE_SECRET_KEY:
         raise HTTPException(503, "Zahlungen sind noch nicht eingerichtet")
     try:
