@@ -24,12 +24,19 @@ def _prices() -> dict[Tier, str]:
     return {Tier.PRO: settings.STRIPE_PRICE_PRO, Tier.AGENCY: settings.STRIPE_PRICE_AGENCY}
 
 
+def _stripe_base() -> str:
+    # Only dev/test may redirect Stripe calls (local fake for hermetic e2e); prod always talks to Stripe.
+    if settings.dev_endpoints_enabled and settings.STRIPE_API_BASE:
+        return settings.STRIPE_API_BASE.rstrip("/")
+    return STRIPE
+
+
 async def _stripe(path: str, form: list[tuple[str, str]]) -> dict:
     if not settings.STRIPE_SECRET_KEY:
         raise HTTPException(503, "Zahlungen sind noch nicht eingerichtet")
     try:
         async with httpx.AsyncClient(timeout=20) as c:
-            r = await c.post(f"{STRIPE}/{path}", content=urlencode(form),
+            r = await c.post(f"{_stripe_base()}/{path}", content=urlencode(form),
                              headers={"Content-Type": "application/x-www-form-urlencoded"},
                              auth=(settings.STRIPE_SECRET_KEY, ""))
     except httpx.HTTPError:
@@ -82,12 +89,12 @@ async def cancel_all_subscriptions(customer: str) -> None:
         raise HTTPException(503, "Abo kann nicht gekündigt werden (Zahlungen nicht eingerichtet) – Löschung abgebrochen")
     try:
         async with httpx.AsyncClient(timeout=20) as c:
-            r = await c.get(f"{STRIPE}/subscriptions", auth=(settings.STRIPE_SECRET_KEY, ""),
+            r = await c.get(f"{_stripe_base()}/subscriptions", auth=(settings.STRIPE_SECRET_KEY, ""),
                             params={"customer": customer, "status": "all", "limit": 100})
             r.raise_for_status()
             for sub in r.json().get("data", []):
                 if sub.get("status") not in ("canceled", "incomplete_expired"):
-                    d = await c.delete(f"{STRIPE}/subscriptions/{sub['id']}", auth=(settings.STRIPE_SECRET_KEY, ""))
+                    d = await c.delete(f"{_stripe_base()}/subscriptions/{sub['id']}", auth=(settings.STRIPE_SECRET_KEY, ""))
                     d.raise_for_status()
     except httpx.HTTPError:
         raise HTTPException(502, "Abo konnte nicht gekündigt werden – Löschung abgebrochen, bitte erneut versuchen")

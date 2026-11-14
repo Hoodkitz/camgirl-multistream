@@ -145,6 +145,21 @@
                     <p id="subscription-status"></p>
                     <button class="btn btn-primary" onclick="app.checkoutStripe()" data-i18n="upgrade_pro">Upgrade to Pro</button>
 
+                    <h3 data-i18n="team_members_title">Team Members</h3>
+                    <div id="team-section">
+                        <form id="team-form" onsubmit="app.addTeamMember(event)" class="inline-form">
+                            <input type="email" id="team-email" placeholder="E-Mail" required>
+                            <input type="password" id="team-password" placeholder="Password (min. 10 chars)" required minlength="10">
+                            <select id="team-role" required>
+                                <option value="agent">Agent (Chat)</option>
+                                <option value="creator">Creator (Streams & Chat)</option>
+                                <option value="audit">Audit (Stats)</option>
+                            </select>
+                            <button type="submit" class="btn btn-primary" data-i18n="add">Add</button>
+                        </form>
+                        <ul id="team-members-list" class="item-list"></ul>
+                    </div>
+
                     <h3 class="danger-text" data-i18n="danger_zone">Danger Zone</h3>
                     <div class="danger-box">
                         <h4 data-i18n="delete_account">Delete Account</h4>
