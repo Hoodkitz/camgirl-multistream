@@ -52,6 +52,8 @@ const translations = {
         delete_btn: 'Permanently Delete',
         revoke: 'Revoke',
         reauth_prompt: 'Please enter your password to confirm the deletion:',
+        team_members_title: 'Team Members',
+        remove: 'Remove',
         no_items: 'No items found.'
     },
     de: {
@@ -93,6 +95,8 @@ const translations = {
         delete_btn: 'Endgültig löschen',
         revoke: 'Widerrufen',
         reauth_prompt: 'Bitte Passwort eingeben, um die Löschung zu bestätigen:',
+        team_members_title: 'Teammitglieder',
+        remove: 'Entfernen',
         no_items: 'Keine Einträge gefunden.'
     }
 };
@@ -196,6 +200,7 @@ function showView(viewName) {
     $(`#view-${viewName}`).classList.add('active');
     
     if (viewName === 'chat' && !state.ws) connectWs();
+    if (viewName === 'settings') loadTeamMembers();
 }
 
 async function init() {
@@ -252,12 +257,12 @@ function logout() {
     // nothing of the previous account may remain visible for the next person on this device
     state.lastEventId = null;
     state.automation = null;
-    ['#chat-messages', '#credentials-list', '#stream-keys-list', '#sessions-list', '#stats-content'].forEach(sel => {
+    ['#chat-messages', '#credentials-list', '#stream-keys-list', '#sessions-list', '#stats-content', '#team-members-list'].forEach(sel => {
         const el = $(sel); if (el) el.innerHTML = '';
     });
     const nk = $('#new-stream-key-result'); if (nk) { nk.innerHTML = ''; nk.classList.add('hidden'); }
     // back to a clean login tab: no leftover register tab / typed values for the next person
-    $$('#login-form, #register-form').forEach(f => f.reset());
+    $$('#login-form, #register-form, #team-form').forEach(f => f.reset());
     showAuthTab('login');
     $('#auth-section').classList.add('active');
     $('#main-section').classList.remove('active');
@@ -275,6 +280,7 @@ function showApp() {
     loadDashboard();
     loadAutomation();
     loadStats();
+    loadTeamMembers();
     
     $('#subscription-status').textContent = `Current Tier: ${state.tenant.tier}`;
 }
@@ -546,11 +552,57 @@ async function deleteAccount(e) {
     } catch (e) {}
 }
 
+// Team Management
+async function loadTeamMembers() {
+    const ul = $('#team-members-list');
+    if (!ul) return;
+    try {
+        const members = await apiFetch(`${API_BASE}/auth/team`);
+        const sec = $('#team-section');
+        if (sec) sec.classList.remove('hidden');
+        if (!members || !members.length) { ul.innerHTML = `<li>${translations[state.lang].no_items}</li>`; return; }
+        ul.innerHTML = members.map(m => `
+            <li>
+                <span><strong>${escapeHTML(m.email)}</strong> (${escapeHTML(m.role)})</span>
+                ${m.role !== 'owner' ? `<button class="btn btn-sm btn-danger" onclick="app.removeTeamMember('${m.id}')">${translations[state.lang].remove}</button>` : ''}
+            </li>
+        `).join('');
+    } catch (e) {
+        const sec = $('#team-section');
+        if (sec) sec.classList.add('hidden');
+    }
+}
+
+async function addTeamMember(e) {
+    e.preventDefault();
+    const payload = {
+        email: $('#team-email').value,
+        password: $('#team-password').value,
+        role: $('#team-role').value
+    };
+    try {
+        await apiFetch(`${API_BASE}/auth/team`, { method: 'POST', body: JSON.stringify(payload) });
+        showToast(state.lang === 'de' ? 'Teammitglied hinzugefügt' : 'Team member added');
+        $('#team-email').value = '';
+        $('#team-password').value = '';
+        loadTeamMembers();
+    } catch (e) {}
+}
+
+async function removeTeamMember(id) {
+    try {
+        await apiFetch(`${API_BASE}/auth/team/${id}`, { method: 'DELETE' });
+        showToast(state.lang === 'de' ? 'Teammitglied entfernt' : 'Team member removed');
+        loadTeamMembers();
+    } catch (e) {}
+}
+
 // Expose to window
 window.app = {
     login, register, logout, toggleLang, showAuthTab, showView,
     addCredential, createStreamKey, revokeStreamKey,
-    sendChatMessage, saveAutomation, checkoutStripe, deleteAccount
+    sendChatMessage, saveAutomation, checkoutStripe, deleteAccount,
+    loadTeamMembers, addTeamMember, removeTeamMember
 };
 
 // Start

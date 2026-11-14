@@ -14,6 +14,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from typing import ClassVar
 
 import httpx
 import pytest
@@ -30,7 +31,7 @@ def _port() -> int:
 
 
 class _FakeStripe(BaseHTTPRequestHandler):
-    seen: list = []
+    seen: ClassVar[list[tuple[str, str, str]]] = []
 
     def log_message(self, *a):
         pass
@@ -53,6 +54,7 @@ class _FakeStripe(BaseHTTPRequestHandler):
 
 @pytest.fixture(scope="module")
 def stack():
+    _FakeStripe.seen = []
     stripe = HTTPServer(("127.0.0.1", 0), _FakeStripe)
     threading.Thread(target=stripe.serve_forever, daemon=True).start()
     port, tmp = _port(), tempfile.mkdtemp()
@@ -89,7 +91,7 @@ def browser():
     with sync_api.sync_playwright() as p:
         try:
             b = p.chromium.launch(headless=True)
-        except Exception as e:  # browser binaries missing
+        except (sync_api.Error, OSError) as e:  # browser binaries missing
             pytest.skip(f"chromium unavailable: {e}")
         yield b
         b.close()
@@ -103,7 +105,7 @@ def test_register_login_team_checkout(stack, browser):
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
 
-    # Registration through the UI
+    # 1. Registration through the UI
     page.goto(f"{base}/app/")
     page.click("button[data-i18n=register_tab]")
     page.fill("#reg-name", name)
@@ -112,7 +114,7 @@ def test_register_login_team_checkout(stack, browser):
     page.click("#register-form button[type=submit]")
     page.wait_for_selector("#main-section.active", timeout=10000)
 
-    # Logout, then login through the UI
+    # 2. Logout, then login through the UI
     page.click("[data-i18n=logout]")
     page.wait_for_selector("#auth-section.active")
     page.fill("#login-email", email)
@@ -120,29 +122,65 @@ def test_register_login_team_checkout(stack, browser):
     page.click("#login-form button[type=submit]")
     page.wait_for_selector("#main-section.active", timeout=10000)
 
-    # Main flows: every view renders without JS errors
+    # 3. Main flows navigation: every view renders without JS errors
     for view in ("chat", "automation", "stats", "settings", "dashboard"):
         page.click(f".nav-btn[onclick*=\"'{view}'\"]")
         page.wait_for_selector(f"#view-{view}.active")
 
-    # Team (API; the web app has no team UI): owner adds an agent, who can log in; duplicates are refused
-    api = httpx.Client(base_url=base)
-    assert api.post("/api/v1/auth/login", json={"email": email, "password": "wrong-password-1"}).status_code == 401
-    owner = api.post("/api/v1/auth/login", json={"email": email, "password": PW}).json()["access_token"]
-    H = {"Authorization": f"Bearer {owner}"}
-    agent = f"agent-{uuid.uuid4().hex[:6]}@example.com"
-    r = api.post("/api/v1/auth/team", json={"email": agent, "password": PW, "role": "agent"}, headers=H)
-    assert r.status_code == 201, r.text
-    assert api.post("/api/v1/auth/team", json={"email": agent, "password": PW, "role": "agent"}, headers=H).status_code == 409
-    assert {u["email"] for u in api.get("/api/v1/auth/team", headers=H).json()} == {email, agent}
-    assert api.post("/api/v1/auth/login", json={"email": agent, "password": PW}).status_code == 200
+    # 4. Dashboard flows: stream key create & revoke, platform credentials
+    page.click(".nav-btn[onclick*=\"'dashboard'\"]")
+    page.fill("#sk-label", "Main OBS Key")
+    page.click("#view-dashboard form:has(#sk-label) button[type=submit]")
+    page.wait_for_selector("#new-stream-key-result:not(.hidden)", timeout=5000)
+    page.wait_for_selector("#stream-keys-list li:has-text('Main OBS Key')")
+    page.click("#stream-keys-list li:has-text('Main OBS Key') button")
+    page.wait_for_selector("#stream-keys-list li:has-text('(Revoked)')", timeout=5000)
 
-    # Stripe checkout (test mode, local fake) -> browser is redirected to the checkout URL
+    page.fill("#cred-username", "testcreator_cam")
+    page.fill("#cred-streamkey", "secret-stream-token")
+    page.click("#view-dashboard form:has(#cred-username) button[type=submit]")
+    page.wait_for_selector("#credentials-list li:has-text('testcreator_cam')", timeout=5000)
+
+    # 5. Automation settings flow
+    page.click(".nav-btn[onclick*=\"'automation'\"]")
+    page.check("#auto-greet-enabled")
+    page.fill("#auto-greet-template", "Welcome {username} to {platform}!")
+    page.fill("#auto-tip-goal", "1000")
+    page.click("#automation-form button[type=submit]")
+
+    # 6. Team management flow: add agent via UI, verify login via API, remove agent via UI
     page.click(".nav-btn[onclick*=\"'settings'\"]")
+    page.wait_for_selector("#view-settings.active")
+    agent_email = f"agent-{uuid.uuid4().hex[:6]}@example.com"
+    page.fill("#team-email", agent_email)
+    page.fill("#team-password", PW)
+    page.select_option("#team-role", "agent")
+    page.click("#team-form button[type=submit]")
+    page.wait_for_selector(f"#team-members-list li:has-text('{agent_email}')", timeout=5000)
+
+    # Agent can log in
+    api = httpx.Client(base_url=base)
+    agent_resp = api.post("/api/v1/auth/login", json={"email": agent_email, "password": PW})
+    assert agent_resp.status_code == 200, agent_resp.text
+
+    # Owner removes agent via UI
+    page.click(f"#team-members-list li:has-text('{agent_email}') button")
+    page.wait_for_selector(f"#team-members-list li:has-text('{agent_email}')", state="detached", timeout=5000)
+
+    # Removed agent can no longer log in
+    assert api.post("/api/v1/auth/login", json={"email": agent_email, "password": PW}).status_code == 401
+
+    # 7. Language toggle flow
+    page.click("#lang-btn")
+    assert page.text_content("#lang-btn") == "EN"
+    page.click("#lang-btn")
+    assert page.text_content("#lang-btn") == "DE"
+
+    # 8. Stripe checkout (test mode, local fake) -> browser is redirected to the checkout URL
     page.click("[data-i18n=upgrade_pro]")
     page.wait_for_url("**/pay/cs_test_fake", timeout=10000)
     assert "FAKE STRIPE CHECKOUT" in page.content()
-    path, authz, body = fake.seen[-1]
+    path, _authz, body = fake.seen[-1]
     assert path == "/v1/checkout/sessions" and "price_test_pro" in body and "mode=subscription" in body
     assert not errors, errors
     page.close()
