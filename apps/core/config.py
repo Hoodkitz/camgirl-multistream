@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     CONNECTOR_SECRET: str = "dev-connector-secret"
     STRIPE_WEBHOOK_SECRET: str = "whsec_dev"
     STRIPE_SECRET_KEY: str = ""          # sk_live_/sk_test_; empty = billing endpoints answer 503
+    STRIPE_API_BASE: str = ""            # dev/test only: point billing at a local Stripe fake
     STRIPE_PRICE_PRO: str = ""           # price_... (monthly subscription)
     STRIPE_PRICE_AGENCY: str = ""
     PUBLIC_BASE_URL: str = "http://localhost:8000"

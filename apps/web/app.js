@@ -256,6 +256,9 @@ function logout() {
         const el = $(sel); if (el) el.innerHTML = '';
     });
     const nk = $('#new-stream-key-result'); if (nk) { nk.innerHTML = ''; nk.classList.add('hidden'); }
+    // back to a clean login tab: no leftover register tab / typed values for the next person
+    $$('#login-form, #register-form').forEach(f => f.reset());
+    showAuthTab('login');
     $('#auth-section').classList.add('active');
     $('#main-section').classList.remove('active');
 }
